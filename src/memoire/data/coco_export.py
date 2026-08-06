@@ -49,17 +49,19 @@ def records_to_coco(
     annotations = []
     ann_id = 1
     for img_id, rec in enumerate(ordered, start=1):
-        images.append(
-            {
-                "id": img_id,
-                "file_name": os.path.basename(rec["file_path"]),
-                "width": int(rec["width"]),
-                "height": int(rec["height"]),
-                "source": rec["source"],
-                "memoire_image_id": rec["image_id"],
-                "group_id": rec["group_id"],
-            }
-        )
+        image_entry = {
+            "id": img_id,
+            "file_name": os.path.basename(rec["file_path"]),
+            "width": int(rec["width"]),
+            "height": int(rec["height"]),
+            "source": rec["source"],
+            "memoire_image_id": rec["image_id"],
+            "group_id": rec["group_id"],
+            "memoire_file_path": str(rec["file_path"]),
+        }
+        if rec.get("split") is not None:
+            image_entry["split"] = rec["split"]
+        images.append(image_entry)
         for inst in rec["instances"]:
             name = resolve(inst["source_class"])
             if name is None:

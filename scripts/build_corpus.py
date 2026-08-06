@@ -349,6 +349,8 @@ def main() -> None:
     }
 
     all_records = [rec for records in corpora.values() for rec in records]
+    for rec in all_records:
+        rec["split"] = split_of_image[rec["image_id"]]
     per_image = compute_stats(all_records)
     per_image["split"] = per_image["image_id"].map(split_of_image)
     per_source_agg = aggregate_by_source(per_image)

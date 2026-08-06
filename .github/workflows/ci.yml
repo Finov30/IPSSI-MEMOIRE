@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.10"
+          enable-cache: true
+
+      - name: Install dependencies (dev extra)
+        run: uv sync --extra dev
+
+      # Torch from the CPU wheel index: the default index would pull the CUDA
+      # build (several GB of useless wheels on a CI runner). MLflow (train
+      # extra) is deliberately not installed: tracking is optional by design
+      # and CI exercises the JSONL fallback path.
+      - name: Install torch (CPU wheels)
+        run: uv pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.2"
+
+      - name: Ruff
+        run: uv run --no-sync ruff check src scripts tests
+
+      # realdata-marked tests skip themselves when the datasets are absent;
+      # synthetic tests (incl. the check_no_leak guard) are blocking.
+      - name: Pytest
+        run: uv run --no-sync pytest -q

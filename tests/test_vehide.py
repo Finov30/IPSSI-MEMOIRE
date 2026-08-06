@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,9 @@ from memoire.data.vehide import (
     polygon_bbox,
 )
 
-REAL_ROOT = Path("/home/hdcc5629/memoire-datasets/vehide")
+REAL_ROOT = (
+    Path(os.environ.get("MEMOIRE_DATASETS", "/home/hdcc5629/memoire-datasets")) / "vehide"
+)
 
 
 # ---------------------------------------------------------------------------

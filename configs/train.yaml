@@ -1,0 +1,54 @@
+# =============================================================================
+# Default training configuration (docs/CONVENTIONS-TRAINING.md).
+# Development-sized run: binary segmentation, 512x512, U-Net base 32, 200
+# iterations. Real runs override iterations/output_dir via the CLI:
+#   uv run python scripts/train.py --config configs/train.yaml \
+#     --override iterations=20000 --override output_dir=runs/full
+# =============================================================================
+
+seed: 42
+
+# Processed COCO exports (Phase 1). Add vehide.json / hitl.json to widen the
+# corpus; paths are relative to the working directory (repo root).
+corpus:
+  - data/processed/cardd.json
+
+# Root prepended to COCO file_name when an image entry has no
+# memoire_file_path extra. null = rely on memoire_file_path.
+images_root: null
+
+# --- task --------------------------------------------------------------------
+mode: binary          # binary | multiclass
+num_classes: null     # derived from mode when null (binary: 2, multiclass: 14)
+input_size: 512       # letterbox target, must be a multiple of 2**depth
+
+# --- model (U-Net from scratch, random init only) ----------------------------
+in_channels: 3
+base_channels: 32
+depth: 4
+gn_groups: 8
+
+# --- data pipeline -----------------------------------------------------------
+batch_size: 4
+num_workers: 0
+augment: true         # horizontal flips on the train split only
+subset_n_images: null # deterministic train subsampling (data-volume curve)
+
+# --- optimisation ------------------------------------------------------------
+lr: 3.0e-4
+weight_decay: 1.0e-2
+ce_weight: 1.0
+dice_weight: 1.0
+iterations: 200       # schedule length in iterations, never epochs
+warmup_iterations: 20 # linear warmup, then cosine decay to 0
+val_every: 50         # validation + checkpoint cadence (iterations)
+
+# --- runtime -----------------------------------------------------------------
+device: auto          # auto | cpu | cuda | cuda:N
+output_dir: runs/dev
+
+# --- tracking (optional; JSONL history.jsonl is always written) --------------
+mlflow:
+  tracking_uri: null  # e.g. file:./mlruns or http://host:5000; null = disabled
+  experiment: memoire-seg
+  run_name: null
