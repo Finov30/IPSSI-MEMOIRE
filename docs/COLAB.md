@@ -18,7 +18,7 @@ Torch GPU est préinstallé sur Colab : on installe seulement le paquet et ses
 dépendances données. MLflow est optionnel (fallback JSONL sinon).
 
 ```python
-!git clone https://github.com/<VOTRE_COMPTE>/IPSSI-MEMOIRE.git
+!git clone https://github.com/Finov30/IPSSI-MEMOIRE.git
 %cd /content/IPSSI-MEMOIRE
 !pip install -q -e .
 # Optionnel, pour le tracking MLflow :
