@@ -1,0 +1,47 @@
+# Apprendre sans mémoire
+
+Chaîne de traitement pour la segmentation de dommages automobiles par un réseau entraîné de zéro.
+
+Mémoire de fin d'études — Master 2 Big Data & Intelligence Artificielle, campus de Nice.
+
+**Problématique :** combien de données annotées faut-il pour qu'un modèle entraîné de zéro
+détecte de façon fiable les dommages d'un véhicule de location ?
+
+## Structure
+
+```
+src/memoire/data/    Loaders des corpus, harmonisation, splits, export COCO
+configs/             Taxonomie unifiée (arbitrage documenté, chap. 4.5)
+scripts/             Points d'entrée (construction du corpus, etc.)
+tests/               Tests pytest (synthétiques + realdata)
+docs/                Conventions du pipeline
+data-raw -> ~/memoire-datasets   (symlink, hors git)
+data/processed/      Sorties de conversion (hors git, DVC à venir)
+```
+
+## Corpus
+
+| Corpus | Images | Instances | Format source |
+|---|---|---|---|
+| VehiDE | 13 945 | 36 081 | Polygones VIA (non standard), 7 classes |
+| CarDD | 4 000 (2 816 / 810 / 374) | 8 740 | COCO, 6 classes |
+| Humans in the Loop | 814 | 9 084 | Polygones, 8 classes (⚠️ dossiers sources inversés) |
+
+Les chiffres proviennent d'un comptage direct des fichiers d'annotations ; tout écart mesuré
+par le pipeline est documenté dans `data/processed/REPORT.md`.
+
+## Mise en route
+
+```bash
+uv venv .venv && uv pip install -e '.[dev]'
+uv run pytest
+uv run python scripts/build_corpus.py
+```
+
+## Garde-fous
+
+- **Split par véhicule/session, jamais par image** — `check_no_leak` lève si un groupe
+  apparaît dans deux splits (contrôle destiné à devenir bloquant en CI).
+- **Taxonomie explicite** — aucune fusion de classes implicite : chaque décision
+  (mapper / conserver / exclure) est dans `configs/taxonomy.yaml` avec sa justification.
+- **Comptages de contrôle** — les loaders sont testés contre les volumes vérifiés à la main.

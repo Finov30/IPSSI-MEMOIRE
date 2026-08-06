@@ -1,0 +1,28 @@
+# Données — jamais dans git (DVC plus tard)
+/data-raw
+/data/
+*.zip
+*.tar
+*.blend
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Outils
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+mlruns/
+.dvc/cache
+
+# OS / éditeurs
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

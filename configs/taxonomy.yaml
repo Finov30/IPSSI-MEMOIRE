@@ -1,0 +1,199 @@
+# =============================================================================
+# Harmonisation des taxonomies (mémoire, chapitre 4.5)
+# =============================================================================
+# Ce fichier est l'unique lieu d'arbitrage entre les nomenclatures des trois
+# sources (VehiDE, CarDD, HitL). Il est chargé par src/memoire/data/taxonomy.py
+# et modifiable sans toucher au code.
+#
+# Décisions possibles pour chaque classe source :
+#   - map           : alignée sur une classe canonique partagée par au moins
+#                     deux sources (ou identité pour le référentiel CarDD).
+#   - keep_specific : aucun équivalent inter-source ; conservée sous une classe
+#                     canonique propre. Son exclusion éventuelle se décidera à
+#                     l'expérimentation, pas ici.
+#   - exclude       : écartée du corpus harmonisé (canonical: null, note
+#                     obligatoire). Aucune classe n'est exclue à ce stade.
+#
+# Chaque classe canonique porte :
+#   - description : définition courte en français (taxonomie fine, 13 classes).
+#   - group       : regroupement large (7 groupes) pour les analyses/évaluations
+#                   à granularité grossière.
+#
+# Effectifs d'instances vérifiés par comptage direct sur les annotations
+# (août 2026) ; ils sont rappelés dans les notes pour documenter l'arbitrage.
+
+canonical_classes:
+  scratch:
+    description: "Rayure superficielle de la peinture ou du vernis, sans déformation de la tôle."
+    group: surface
+  dent:
+    description: "Bosse ou enfoncement de la carrosserie, déformation sans rupture du matériau."
+    group: deformation
+  crack:
+    description: "Fissure du matériau (pare-chocs, carrosserie, plastique) sans séparation complète."
+    group: rupture
+  tear:
+    description: "Déchirure du matériau (typiquement pare-chocs plastique), plus sévère qu'une fissure."
+    group: rupture
+  puncture:
+    description: "Perforation traversante de la carrosserie ou d'un élément."
+    group: rupture
+  broken_part:
+    description: "Pièce cassée mais toujours présente sur le véhicule."
+    group: rupture
+  glass_shatter:
+    description: "Vitrage brisé ou étoilé (pare-brise, vitres latérales, lunette)."
+    group: vitrage
+  lamp_broken:
+    description: "Optique cassé (phare, feu arrière, clignotant)."
+    group: optique
+  tire_flat:
+    description: "Pneu crevé ou dégonflé."
+    group: pneumatique
+  missing_part:
+    description: "Pièce absente du véhicule (arrachée ou déposée)."
+    group: perte_de_piece
+  paint_chip:
+    description: "Éclat de peinture localisé laissant apparaître l'apprêt ou le métal."
+    group: surface
+  flaking:
+    description: "Écaillage de la peinture sur une zone étendue."
+    group: surface
+  corrosion:
+    description: "Corrosion ou rouille de la carrosserie."
+    group: surface
+
+sources:
+  vehide:
+    tray_son:
+      canonical: scratch
+      decision: map
+      note: >-
+        « Rayure » (14 647 instances). Équivalent direct de CarDD « scratch »
+        et HitL « Scratch » : même sémantique de dommage surfacique.
+    mop_lom:
+      canonical: dent
+      decision: map
+      note: >-
+        « Bosse » (5 681 instances). Équivalent direct de CarDD « dent »
+        et HitL « Dent ».
+    rach:
+      canonical: tear
+      decision: keep_specific
+      note: >-
+        « Déchirure » (5 509 instances). Pas d'équivalent CarDD : plus sévère
+        qu'une fissure (crack), sans être une perforation (thung). Fusionner
+        avec crack écraserait une distinction de sévérité propre à VehiDE ;
+        conservée telle quelle, arbitrage final à l'expérimentation.
+    mat_bo_phan:
+      canonical: missing_part
+      decision: map
+      note: >-
+        « Pièce manquante » (2 818 instances). Équivalent direct de HitL
+        « Missing part » ; absent de CarDD.
+    be_den:
+      canonical: lamp_broken
+      decision: map
+      note: >-
+        « Phare cassé » (2 782 instances). Équivalent direct de CarDD
+        « lamp broken ».
+    thung:
+      canonical: puncture
+      decision: keep_specific
+      note: >-
+        « Perforation » (2 423 instances). Pas d'équivalent CarDD ni HitL :
+        rupture traversante, distincte de crack et tear. Conservée telle
+        quelle, arbitrage final à l'expérimentation.
+    vo_kinh:
+      canonical: glass_shatter
+      decision: map
+      note: >-
+        « Vitre brisée » (2 221 instances). Équivalent direct de CarDD
+        « glass shatter ».
+
+  cardd:
+    dent:
+      canonical: dent
+      decision: map
+      note: >-
+        Identité (2 543 instances). CarDD sert de référentiel de nommage
+        pour les classes partagées.
+    scratch:
+      canonical: scratch
+      decision: map
+      note: "Identité (3 595 instances)."
+    crack:
+      canonical: crack
+      decision: map
+      note: >-
+        Identité (898 instances). HitL « Cracked » est aligné sur cette
+        classe.
+    glass shatter:
+      canonical: glass_shatter
+      decision: map
+      note: >-
+        Identité (681 instances), normalisation du nom en snake_case
+        uniquement.
+    lamp broken:
+      canonical: lamp_broken
+      decision: map
+      note: >-
+        Identité (704 instances), normalisation du nom en snake_case
+        uniquement.
+    tire flat:
+      canonical: tire_flat
+      decision: map
+      note: >-
+        Identité (319 instances), normalisation du nom en snake_case.
+        Classe propre à CarDD (aucun équivalent VehiDE/HitL) mais membre
+        du référentiel CarDD, donc conservée comme classe canonique.
+
+  hitl:
+    Scratch:
+      canonical: scratch
+      decision: map
+      note: "Équivalent direct de CarDD « scratch » (3 242 instances)."
+    Dent:
+      canonical: dent
+      decision: map
+      note: "Équivalent direct de CarDD « dent » (1 664 instances)."
+    Broken part:
+      canonical: broken_part
+      decision: keep_specific
+      note: >-
+        (1 500 instances.) Pas d'équivalent CarDD : la pièce est cassée mais
+        présente, à distinguer de missing_part (pièce absente) et de crack
+        (fissure sans casse). Conservée telle quelle, arbitrage final à
+        l'expérimentation.
+    Paint chip:
+      canonical: paint_chip
+      decision: keep_specific
+      note: >-
+        (1 356 instances.) Pas d'équivalent CarDD : éclat localisé, distinct
+        d'une rayure (scratch) par sa géométrie et sa cause. Conservée telle
+        quelle, arbitrage final à l'expérimentation.
+    Missing part:
+      canonical: missing_part
+      decision: map
+      note: "Équivalent direct de VehiDE « mat_bo_phan » (632 instances)."
+    Flaking:
+      canonical: flaking
+      decision: keep_specific
+      note: >-
+        (337 instances.) Pas d'équivalent CarDD : écaillage étendu, distinct
+        de paint_chip (éclat ponctuel). Conservée telle quelle, arbitrage
+        final à l'expérimentation.
+    Corrosion:
+      canonical: corrosion
+      decision: keep_specific
+      note: >-
+        (277 instances.) Pas d'équivalent CarDD ni VehiDE : dommage chimique
+        et non mécanique. Conservée telle quelle, arbitrage final à
+        l'expérimentation.
+    Cracked:
+      canonical: crack
+      decision: map
+      note: >-
+        Équivalent direct de CarDD « crack » (76 instances seulement :
+        classe très minoritaire côté HitL, à surveiller lors des splits
+        stratifiés).
