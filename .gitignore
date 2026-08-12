@@ -26,3 +26,9 @@ mlruns/
 Thumbs.db
 .idea/
 .vscode/
+
+# Claude Code (settings.json can be committed; local overrides never are)
+.claude/settings.local.json
+
+# Environnement local (chemins machine, jamais versionnés)
+.env

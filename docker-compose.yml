@@ -1,0 +1,9 @@
+services:
+  spark:
+    build:
+      context: .
+      dockerfile: docker/spark.Dockerfile
+    volumes:
+      - .:/app
+      - ${MEMOIRE_DATASETS_ROOT}:/data/memoire-datasets:ro
+    working_dir: /app
