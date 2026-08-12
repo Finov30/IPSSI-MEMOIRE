@@ -94,11 +94,35 @@ def set_global_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def _iter_damage_datasets(dataset: Dataset):
+    """Yield every :class:`DamageSegDataset` nested inside Subset/ConcatDataset wrappers."""
+    if isinstance(dataset, DamageSegDataset):
+        yield dataset
+    elif isinstance(dataset, Subset):
+        yield from _iter_damage_datasets(dataset.dataset)
+    elif isinstance(dataset, ConcatDataset):
+        for child in dataset.datasets:
+            yield from _iter_damage_datasets(child)
+
+
 def seed_worker(worker_id: int) -> None:
-    """Derive per-worker numpy/random seeds from the torch base seed."""
+    """Derive per-worker numpy/random/augmentation seeds from the torch base seed.
+
+    ``torch.initial_seed()`` already differs per worker (PyTorch derives it from
+    the DataLoader's ``generator``). The flip-augmentation ``torch.Generator``
+    passed into every ``DamageSegDataset`` is a plain object copied verbatim into
+    each forked worker process, so without this it starts identical (same state,
+    same seed) in every worker and produces correlated flip decisions across
+    workers instead of independent ones.
+    """
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
+    worker_info = torch.utils.data.get_worker_info()
+    if worker_info is not None:
+        for dataset in _iter_damage_datasets(worker_info.dataset):
+            if dataset.generator is not None:
+                dataset.generator.manual_seed(worker_seed)
 
 
 def resolve_device(spec: str) -> torch.device:
@@ -173,15 +197,17 @@ def evaluate(
     """Full pass over ``loader``: mean loss + per-class IoU/Dice."""
     was_training = model.training
     model.eval()
-    conf = seg_metrics.new_confusion(num_classes)
+    conf = seg_metrics.new_confusion(num_classes, device=device)
     total_loss, batches = 0.0, 0
     for images, masks in loader:
-        images = images.to(device)
-        masks = masks.to(device)
+        images = images.to(device, non_blocking=True)
+        masks = masks.to(device, non_blocking=True)
         logits = model(images)
         total_loss += float(loss_fn(logits, masks))
         batches += 1
-        conf = seg_metrics.confusion_update(conf, logits.cpu(), masks.cpu())
+        # confusion_update moves its inputs to conf.device itself; conf already
+        # lives on `device`, so this stays on-GPU instead of a full B×K×H×W sync.
+        conf = seg_metrics.confusion_update(conf, logits, masks)
     if was_training:
         model.train()
 
@@ -318,7 +344,7 @@ def train(config: dict) -> dict:
     val_dataset = build_dataset(config, "val")
 
     subset_n = config.get("subset_n_images")
-    if subset_n:
+    if subset_n is not None:
         train_dataset = Subset(
             train_dataset, subset_indices(len(train_dataset), subset_n, seed)
         )
@@ -387,8 +413,8 @@ def train(config: dict) -> dict:
             for images, masks in train_loader:
                 if iteration >= total_iterations:
                     break
-                images = images.to(device)
-                masks = masks.to(device)
+                images = images.to(device, non_blocking=True)
+                masks = masks.to(device, non_blocking=True)
 
                 optimizer.zero_grad(set_to_none=True)
                 logits = model(images)

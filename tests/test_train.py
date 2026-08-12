@@ -14,9 +14,16 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PIL import Image
+from torch.utils.data import ConcatDataset, Subset
 
 from memoire.model.unet import UNet
-from memoire.training.train import load_checkpoint, subset_indices, train
+from memoire.training.train import (
+    _iter_damage_datasets,
+    build_dataset,
+    load_checkpoint,
+    subset_indices,
+    train,
+)
 
 IMG_SIZE = 64
 N_TRAIN = 8
@@ -189,3 +196,44 @@ def test_subset_n_images_is_deterministic(corpus, tmp_path):
     # The subsampling itself is a pure function of (n_total, n_keep, seed).
     assert subset_indices(N_TRAIN, 4, seed=123) == subset_indices(N_TRAIN, 4, seed=123)
     assert subset_indices(N_TRAIN, N_TRAIN, seed=123) == list(range(N_TRAIN))
+
+
+def test_subset_n_images_zero_is_not_treated_as_no_subsampling(corpus, tmp_path):
+    # subset_n_images=0 is a real request for an empty train split, not the
+    # None sentinel for "no subsampling" — both are falsy, so `if subset_n:`
+    # used to silently fall back to the full dataset instead of raising.
+    coco_path, images_dir = corpus
+    config = _config(coco_path, images_dir, tmp_path / "run-subset-zero", subset_n_images=0)
+    with pytest.raises(ValueError, match="empty train split"):
+        train(config)
+
+
+def test_iter_damage_datasets_finds_nested_instances(corpus, tmp_path):
+    coco_path, images_dir = corpus
+    config = _config(coco_path, images_dir, tmp_path / "run-nested")
+    dataset = build_dataset(config, "train")
+
+    assert list(_iter_damage_datasets(dataset)) == [dataset]
+    assert list(_iter_damage_datasets(Subset(dataset, [0, 1]))) == [dataset]
+    assert list(_iter_damage_datasets(ConcatDataset([dataset, dataset]))) == [dataset, dataset]
+
+
+def test_multi_worker_augmented_run_completes(corpus, tmp_path):
+    # Regression test for the shared-generator bug: with num_workers>0 (the
+    # setting docs/COLAB.md actually uses for real GPU runs) and augment=True,
+    # every worker used to inherit an identical, unadvanced flip generator.
+    # This exercises that path end-to-end (previously untested entirely).
+    coco_path, images_dir = corpus
+    config = _config(
+        coco_path,
+        images_dir,
+        tmp_path / "run-multiworker",
+        augment=True,
+        num_workers=2,
+        iterations=6,
+        warmup_iterations=1,
+        val_every=6,
+    )
+    summary = train(config)
+    assert len(summary["train_losses"]) == 6
+    assert all(np.isfinite(summary["train_losses"]))
