@@ -33,10 +33,15 @@ par le pipeline est documenté dans `data/processed/REPORT.md`.
 ## Mise en route
 
 ```bash
-uv venv .venv && uv pip install -e '.[dev]'
+uv venv .venv && uv pip install -e '.[dev,train]'
 uv run pytest
 uv run python scripts/build_corpus.py
 ```
+
+`train` (torch, mlflow) est nécessaire dès `uv run pytest` — plusieurs tests
+(modèle, boucle d'entraînement, courbe de volume) l'importent. `spark` (pyspark,
+nécessite un JVM) n'est utile que pour `scripts/spark_build_corpus.py` et
+`docker compose run spark ...` ; voir `docker-compose.yml` et `airflow/`.
 
 ## Garde-fous
 
