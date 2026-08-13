@@ -13,10 +13,13 @@ from PIL import Image
 from memoire.training.volume_curve import (
     build_run_config,
     calibrate,
+    density_bucket_label,
+    parse_density_buckets,
     parse_points,
     parse_seeds,
     point_label,
     run_campaign,
+    run_density_campaign,
     write_csv,
 )
 
@@ -85,6 +88,69 @@ def _make_corpus(root: Path) -> tuple[Path, Path]:
 @pytest.fixture(scope="module")
 def corpus(tmp_path_factory) -> tuple[Path, Path]:
     return _make_corpus(tmp_path_factory.mktemp("synthetic-corpus"))
+
+
+def _make_density_corpus(root: Path) -> tuple[Path, Path]:
+    """8 train images with varying instance counts (1,1,2,2,3,3,4,4) + 4 val images."""
+    images_dir = root / "images"
+    images_dir.mkdir(parents=True)
+    counts = [1, 1, 2, 2, 3, 3, 4, 4, 1, 2, 3, 4]  # last 4 are val
+    images, annotations = [], []
+    ann_id = 1
+    for i, n in enumerate(counts):
+        split = "train" if i < 8 else "val"
+        pixels = np.full((IMG_SIZE, IMG_SIZE, 3), 30, dtype=np.uint8)
+        file_name = f"dimg_{i:03d}.png"
+        Image.fromarray(pixels).save(images_dir / file_name)
+        image_id = i + 1
+        images.append(
+            {
+                "id": image_id,
+                "file_name": file_name,
+                "width": IMG_SIZE,
+                "height": IMG_SIZE,
+                "split": split,
+                "source": "synthetic",
+                "memoire_image_id": f"synthetic/dimg_{i:03d}",
+                "group_id": f"synthetic/dimg_{i:03d}",
+            }
+        )
+        for k in range(n):
+            x0, y0, w, h = 4 + k * 4, 4, 6, 6
+            annotations.append(
+                {
+                    "id": ann_id,
+                    "image_id": image_id,
+                    "category_id": 1,
+                    "segmentation": [
+                        [
+                            float(x0), float(y0),
+                            float(x0 + w), float(y0),
+                            float(x0 + w), float(y0 + h),
+                            float(x0), float(y0 + h),
+                        ]
+                    ],
+                    "bbox": [float(x0), float(y0), float(w), float(h)],
+                    "area": float(w * h),
+                    "iscrowd": 0,
+                }
+            )
+            ann_id += 1
+    coco = {
+        "info": {"description": "density corpus"},
+        "licenses": [],
+        "images": images,
+        "annotations": annotations,
+        "categories": [{"id": 1, "name": "scratch", "supercategory": "damage"}],
+    }
+    coco_path = root / "density_corpus.json"
+    coco_path.write_text(json.dumps(coco), encoding="utf-8")
+    return coco_path, images_dir
+
+
+@pytest.fixture(scope="module")
+def density_corpus(tmp_path_factory) -> tuple[Path, Path]:
+    return _make_density_corpus(tmp_path_factory.mktemp("density-corpus"))
 
 
 def _base_config(corpus: tuple[Path, Path]) -> dict:
@@ -208,3 +274,76 @@ def test_calibrate_rejects_non_positive_iterations(corpus, tmp_path):
     base_config = _base_config(corpus)
     with pytest.raises(ValueError):
         calibrate(base_config, point=None, seed=1, output_root=tmp_path, calibrate_iterations=0)
+
+
+# --- density axis (chap. 7.1) ---
+
+
+def test_parse_density_buckets():
+    assert parse_density_buckets("1,2,3,4+") == [(1, 1), (2, 2), (3, 3), (4, None)]
+    assert parse_density_buckets(" 1 , 4+ ,") == [(1, 1), (4, None)]
+
+
+def test_density_bucket_label():
+    assert density_bucket_label((2, 2)) == "2"
+    assert density_bucket_label((4, None)) == "4+"
+    assert density_bucket_label((2, 3)) == "2-3"
+
+
+def test_build_run_config_with_density_bucket(corpus):
+    base_config = _base_config(corpus)
+    config, run_dir = build_run_config(
+        base_config, 5, 7, Path("runs/dc"), iterations=None, density_bucket=(2, 2)
+    )
+    assert config["subset_n_images"] == 5
+    assert config["density_bucket"] == [2, 2]
+    assert run_dir == Path("runs/dc/n5_density2_seed7")
+    assert config["output_dir"] == str(run_dir)
+
+    # Without density_bucket, naming/config are unchanged (backward compatible).
+    plain_config, plain_dir = build_run_config(base_config, 5, 7, Path("runs/dc"), iterations=None)
+    assert "density_bucket" not in plain_config
+    assert plain_dir == Path("runs/dc/n5_seed7")
+
+
+def test_run_density_campaign_holds_volume_constant_and_varies_bucket(density_corpus, tmp_path):
+    base_config = _base_config(density_corpus)
+    output_root = tmp_path / "density-campaign"
+    events = []
+    rows = run_density_campaign(
+        base_config,
+        volume=2,
+        buckets=[(1, 1), (2, 2)],
+        seeds=[1, 2],
+        output_root=output_root,
+        on_event=lambda bucket, seed, run_dir, skipped: events.append((bucket, seed, skipped)),
+    )
+    assert len(rows) == 4
+    assert {(e[0], e[1]) for e in events} == {((1, 1), 1), ((1, 1), 2), ((2, 2), 1), ((2, 2), 2)}
+    assert all(not skipped for _, _, skipped in events)
+    # Volume (image count) is the same across every run; only the density bucket varies.
+    assert all(r["num_train_images"] == 2 for r in rows)
+    assert {r["density_bucket"] for r in rows} == {"1", "2"}
+
+    # Resumable, same contract as the volume axis.
+    events.clear()
+    rows_again = run_density_campaign(
+        base_config,
+        volume=2,
+        buckets=[(1, 1), (2, 2)],
+        seeds=[1, 2],
+        output_root=output_root,
+        on_event=lambda bucket, seed, run_dir, skipped: events.append(skipped),
+    )
+    assert all(events)
+    assert rows_again == rows
+
+
+def test_run_density_campaign_rejects_empty_buckets_or_seeds(density_corpus, tmp_path):
+    base_config = _base_config(density_corpus)
+    with pytest.raises(ValueError):
+        run_density_campaign(base_config, volume=2, buckets=[], seeds=[1], output_root=tmp_path)
+    with pytest.raises(ValueError):
+        run_density_campaign(
+            base_config, volume=2, buckets=[(1, 1)], seeds=[], output_root=tmp_path
+        )

@@ -1,16 +1,25 @@
 #!/usr/bin/env python
-"""Run the data-volume curve campaign: one training per (subset size, seed).
+"""Run the data-volume or data-density curve campaign (chap. 7.1: the two
+decoupled axes of the thesis's central experiment).
 
-Usage:
+Volume axis (default) — one training per (subset size, seed):
     uv run python scripts/run_volume_curve.py --config configs/train.yaml \
         [--points 50,100,250,500,1000,full] [--seeds 42,43,44] \
         [--iterations 20000] [--output-root runs/volume-curve]
 
-Resumable: a (point, seed) run whose output_dir already has a summary.json is
+Density axis — image count held constant, density stratum varied instead;
+one training per (density bucket, seed):
+    uv run python scripts/run_volume_curve.py --config configs/train.yaml \
+        --density-buckets 1,2,3,4+ --volume-for-density 500 --seeds 42,43,44 \
+        [--iterations 20000] [--output-root runs/density-curve]
+
+Resumable on both axes: a run whose output_dir already has a summary.json is
 skipped unless --force is passed — safe to relaunch after a Colab disconnect.
 
 Calibrate first, on the target GPU, before committing to the full campaign
-(seconds/iteration cannot be estimated from the CPU smoke-run):
+(seconds/iteration cannot be estimated from the CPU smoke-run; the estimate
+applies to either axis, since density-based subsetting doesn't change
+per-iteration compute cost, only which images are selected):
     uv run python scripts/run_volume_curve.py --config configs/train.yaml \
         --calibrate --calibrate-iterations 100
 prints seconds/iteration and the estimated total campaign wall-clock time.
@@ -26,9 +35,12 @@ import yaml
 
 from memoire.training.volume_curve import (
     calibrate,
+    density_bucket_label,
+    parse_density_buckets,
     parse_points,
     parse_seeds,
     run_campaign,
+    run_density_campaign,
     write_csv,
 )
 
@@ -64,6 +76,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="run one short job (largest point, first seed) and print a time estimate, then exit",
     )
     parser.add_argument("--calibrate-iterations", type=int, default=100)
+    parser.add_argument(
+        "--density-buckets", default=None,
+        help="density axis instead of volume: comma-separated instances/image buckets "
+        "(e.g. '1,2,3,4+'); requires --volume-for-density",
+    )
+    parser.add_argument(
+        "--volume-for-density", type=int, default=None,
+        help="fixed subset_n_images for every density-axis run (image count held constant)",
+    )
     return parser.parse_args(argv)
 
 
@@ -101,6 +122,29 @@ def main(argv: list[str] | None = None) -> None:
             },
             indent=2,
         ))
+        return
+
+    if args.density_buckets:
+        if args.volume_for_density is None:
+            raise SystemExit("--density-buckets requires --volume-for-density")
+        buckets = parse_density_buckets(args.density_buckets)
+        if not buckets:
+            raise SystemExit("--density-buckets must be non-empty")
+
+        def on_event_density(bucket, seed: int, run_dir: Path, skipped: bool) -> None:
+            label = "skip" if skipped else "run"
+            print(
+                f"[{label}] density_bucket={density_bucket_label(bucket)} "
+                f"volume={args.volume_for_density} seed={seed} -> {run_dir}"
+            )
+
+        rows = run_density_campaign(
+            base_config, args.volume_for_density, buckets, seeds, args.output_root,
+            iterations=args.iterations, force=args.force, on_event=on_event_density,
+        )
+        csv_path = args.output_root / "density_curve.csv"
+        write_csv(rows, csv_path)
+        print(f"[done] {len(rows)} runs -> {csv_path}")
         return
 
     def on_event(point: int | None, seed: int, run_dir: Path, skipped: bool) -> None:

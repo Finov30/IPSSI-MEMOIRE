@@ -33,6 +33,9 @@ batch_size: 4
 num_workers: 0
 augment: true         # horizontal flips on the train split only
 subset_n_images: null # deterministic train subsampling (data-volume curve)
+density_bucket: null  # [min, max|null] instances/image; null = volume axis
+                       # (chap. 7.1) — requires subset_n_images (volume held
+                       # constant while the density stratum varies)
 
 # --- optimisation ------------------------------------------------------------
 lr: 3.0e-4

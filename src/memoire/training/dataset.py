@@ -90,6 +90,11 @@ class DamageSegDataset(Dataset):
         # Paths are resolved eagerly (pure string work, no disk access) so a
         # misconfigured images_root fails at construction time, not mid-epoch.
         self._paths = [self._resolve_path(img) for img in self.images]
+        # Instance count per image (density axis, chap. 7.1): cheap from the
+        # already-built COCO index, no annotation decoding needed.
+        self.instance_counts = [
+            len(self._coco.getAnnIds(imgIds=[img["id"]])) for img in self.images
+        ]
 
     # -- resolution -----------------------------------------------------------
 

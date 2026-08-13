@@ -135,6 +135,13 @@ def test_class_names(synthetic):
     assert ds.num_classes == 3
 
 
+def test_instance_counts_per_image(synthetic):
+    # train: a=1 instance, b=1 instance, c=2 instances (density axis, chap. 7.1)
+    assert _make(synthetic).instance_counts == [1, 1, 2]
+    # val: d=0 instances, e=1 instance
+    assert _make(synthetic, split="val").instance_counts == [0, 1]
+
+
 # --- shapes, dtypes, values ---
 
 

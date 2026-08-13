@@ -20,6 +20,8 @@ from memoire.model.unet import UNet
 from memoire.training.train import (
     _iter_damage_datasets,
     build_dataset,
+    density_indices,
+    flat_instance_counts,
     load_checkpoint,
     subset_indices,
     train,
@@ -88,6 +90,64 @@ def _make_corpus(root: Path) -> tuple[Path, Path]:
     return coco_path, images_dir
 
 
+def _make_density_corpus(root: Path) -> tuple[Path, Path]:
+    """6 train images with varying instance counts (1, 1, 2, 2, 4, 4) + 2 val images."""
+    images_dir = root / "images"
+    images_dir.mkdir(parents=True)
+    counts = [1, 1, 2, 2, 4, 4, 1, 2]  # last two are val, count irrelevant there
+    images, annotations = [], []
+    ann_id = 1
+    for i, n in enumerate(counts):
+        split = "train" if i < 6 else "val"
+        pixels = np.full((IMG_SIZE, IMG_SIZE, 3), 30, dtype=np.uint8)
+        file_name = f"dimg_{i:03d}.png"
+        Image.fromarray(pixels).save(images_dir / file_name)
+        image_id = i + 1
+        images.append(
+            {
+                "id": image_id,
+                "file_name": file_name,
+                "width": IMG_SIZE,
+                "height": IMG_SIZE,
+                "split": split,
+                "source": "synthetic",
+                "memoire_image_id": f"synthetic/dimg_{i:03d}",
+                "group_id": f"synthetic/dimg_{i:03d}",
+            }
+        )
+        for k in range(n):
+            x0, y0, w, h = 4 + k * 4, 4, 6, 6
+            annotations.append(
+                {
+                    "id": ann_id,
+                    "image_id": image_id,
+                    "category_id": 1,
+                    "segmentation": [
+                        [
+                            float(x0), float(y0),
+                            float(x0 + w), float(y0),
+                            float(x0 + w), float(y0 + h),
+                            float(x0), float(y0 + h),
+                        ]
+                    ],
+                    "bbox": [float(x0), float(y0), float(w), float(h)],
+                    "area": float(w * h),
+                    "iscrowd": 0,
+                }
+            )
+            ann_id += 1
+    coco = {
+        "info": {"description": "density corpus"},
+        "licenses": [],
+        "images": images,
+        "annotations": annotations,
+        "categories": [{"id": 1, "name": "scratch", "supercategory": "damage"}],
+    }
+    coco_path = root / "density_corpus.json"
+    coco_path.write_text(json.dumps(coco), encoding="utf-8")
+    return coco_path, images_dir
+
+
 def _config(corpus: Path, images_root: Path, output_dir: Path, **overrides) -> dict:
     config = {
         "seed": 123,
@@ -118,6 +178,11 @@ def _config(corpus: Path, images_root: Path, output_dir: Path, **overrides) -> d
 @pytest.fixture(scope="module")
 def corpus(tmp_path_factory) -> tuple[Path, Path]:
     return _make_corpus(tmp_path_factory.mktemp("synthetic-corpus"))
+
+
+@pytest.fixture(scope="module")
+def density_corpus(tmp_path_factory) -> tuple[Path, Path]:
+    return _make_density_corpus(tmp_path_factory.mktemp("density-corpus"))
 
 
 def test_smoke_loss_decreases_and_checkpoints_reload(corpus, tmp_path):
@@ -237,3 +302,88 @@ def test_multi_worker_augmented_run_completes(corpus, tmp_path):
     summary = train(config)
     assert len(summary["train_losses"]) == 6
     assert all(np.isfinite(summary["train_losses"]))
+
+
+# --- density axis (chap. 7.1: volume held constant, density stratum varied) ---
+
+
+def test_flat_instance_counts_matches_dataset(density_corpus):
+    coco_path, images_dir = density_corpus
+    config = {
+        "corpus": [str(coco_path)],
+        "images_root": str(images_dir),
+        "mode": "binary",
+        "input_size": IMG_SIZE,
+        "augment": False,
+    }
+    ds = build_dataset(config, "train")
+    assert flat_instance_counts(ds) == [1, 1, 2, 2, 4, 4]
+
+
+def test_flat_instance_counts_concat_dataset_preserves_order(density_corpus):
+    coco_path, images_dir = density_corpus
+    config = {
+        "corpus": [str(coco_path)],
+        "images_root": str(images_dir),
+        "mode": "binary",
+        "input_size": IMG_SIZE,
+        "augment": False,
+    }
+    ds = build_dataset(config, "train")
+    combined = ConcatDataset([ds, ds])
+    assert flat_instance_counts(combined) == [1, 1, 2, 2, 4, 4, 1, 1, 2, 2, 4, 4]
+
+
+def test_density_indices_filters_to_the_bucket():
+    counts = [1, 1, 2, 2, 4, 4]
+    indices = density_indices(counts, n_keep=2, seed=1, density_min=2, density_max=2)
+    assert indices == sorted(indices)
+    assert set(indices) <= {2, 3}
+
+
+def test_density_indices_open_ended_bucket():
+    counts = [1, 2, 3, 4, 5]
+    indices = density_indices(counts, n_keep=2, seed=0, density_min=4, density_max=None)
+    assert set(indices) <= {3, 4}
+
+
+def test_density_indices_deterministic_at_fixed_seed():
+    counts = [1, 1, 2, 2, 4, 4]
+    a = density_indices(counts, n_keep=2, seed=7, density_min=1, density_max=1)
+    b = density_indices(counts, n_keep=2, seed=7, density_min=1, density_max=1)
+    assert a == b
+
+
+def test_density_indices_raises_when_bucket_too_small():
+    counts = [1, 1, 1]
+    with pytest.raises(ValueError, match="density bucket"):
+        density_indices(counts, n_keep=5, seed=0, density_min=1, density_max=1)
+
+
+def test_train_with_density_bucket_selects_only_matching_images(density_corpus, tmp_path):
+    coco_path, images_dir = density_corpus
+    config = _config(
+        coco_path,
+        images_dir,
+        tmp_path / "run-density",
+        subset_n_images=2,
+        density_bucket=[2, 2],
+        iterations=2,
+        warmup_iterations=1,
+        val_every=2,
+    )
+    summary = train(config)
+    assert summary["num_train_images"] == 2
+
+
+def test_train_density_bucket_without_subset_n_images_raises(density_corpus, tmp_path):
+    coco_path, images_dir = density_corpus
+    config = _config(
+        coco_path,
+        images_dir,
+        tmp_path / "run-density-bad",
+        subset_n_images=None,
+        density_bucket=[2, 2],
+    )
+    with pytest.raises(ValueError, match="density_bucket requires subset_n_images"):
+        train(config)

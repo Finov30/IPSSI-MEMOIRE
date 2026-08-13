@@ -27,6 +27,7 @@ import logging
 import math
 import random
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,7 @@ DEFAULTS: dict[str, Any] = {
     "num_workers": 0,
     "augment": True,
     "subset_n_images": None,
+    "density_bucket": None,  # [min, max|null] instances/image; null = volume axis
     "lr": 3.0e-4,
     "weight_decay": 1.0e-2,
     "ce_weight": 1.0,
@@ -146,6 +148,53 @@ def subset_indices(n_total: int, n_keep: int, seed: int) -> list[int]:
     n_keep = min(int(n_keep), n_total)
     rng = random.Random(seed)
     return sorted(rng.sample(range(n_total), n_keep))
+
+
+def flat_instance_counts(dataset: Dataset) -> list[int]:
+    """Per-image instance count, flattened in the same order as ``dataset``'s indices.
+
+    ``dataset`` is whatever :func:`build_dataset` returns: a single
+    :class:`DamageSegDataset`, or a :class:`ConcatDataset` of several — never
+    a :class:`Subset` (density selection runs before subsetting, on the full
+    corpus). ``ConcatDataset`` concatenates its children's global index ranges
+    in ``self.datasets`` order, so this must walk them in the same order.
+    """
+    if isinstance(dataset, DamageSegDataset):
+        return list(dataset.instance_counts)
+    if isinstance(dataset, ConcatDataset):
+        counts: list[int] = []
+        for child in dataset.datasets:
+            counts.extend(flat_instance_counts(child))
+        return counts
+    raise TypeError(f"unsupported dataset type for density sampling: {type(dataset)!r}")
+
+
+def density_indices(
+    counts: Sequence[int], n_keep: int, seed: int, density_min: int, density_max: int | None
+) -> list[int]:
+    """Deterministic sample of ``n_keep`` indices whose instance count falls in
+    ``[density_min, density_max]`` (``density_max=None`` means unbounded, i.e.
+    the "N+" bucket of chap. 7.1's density axis).
+
+    Density-axis counterpart of :func:`subset_indices`: that one samples
+    uniformly across the whole corpus (varying volume, density unconstrained);
+    this one samples only from images matching one density stratum (volume
+    held constant via ``n_keep``, density varied via the bucket) — the two
+    axes He et al.'s unpaired hypothesis (chap. 2.4) needs decoupled.
+    """
+    pool = [
+        i
+        for i, c in enumerate(counts)
+        if c >= density_min and (density_max is None or c <= density_max)
+    ]
+    if len(pool) < n_keep:
+        bucket = f"[{density_min}, {'+inf' if density_max is None else density_max}]"
+        raise ValueError(
+            f"density bucket {bucket} has only {len(pool)} image(s), cannot sample "
+            f"{n_keep} (reduce n_keep or widen the bucket)"
+        )
+    rng = random.Random(seed)
+    return sorted(rng.sample(pool, int(n_keep)))
 
 
 def build_dataset(config: dict, split: str, generator: torch.Generator | None = None) -> Dataset:
@@ -344,7 +393,17 @@ def train(config: dict) -> dict:
     val_dataset = build_dataset(config, "val")
 
     subset_n = config.get("subset_n_images")
-    if subset_n is not None:
+    density_bucket = config.get("density_bucket")
+    if density_bucket is not None:
+        if subset_n is None:
+            raise ValueError("density_bucket requires subset_n_images (volume held constant)")
+        density_min, density_max = density_bucket
+        indices = density_indices(
+            flat_instance_counts(train_dataset), subset_n, seed, int(density_min),
+            None if density_max is None else int(density_max),
+        )
+        train_dataset = Subset(train_dataset, indices)
+    elif subset_n is not None:
         train_dataset = Subset(
             train_dataset, subset_indices(len(train_dataset), subset_n, seed)
         )
