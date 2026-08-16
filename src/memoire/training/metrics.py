@@ -16,8 +16,11 @@ them from the average instead of counting them as 0.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
+import numpy as np
 import torch
+from scipy import ndimage
 from torch import Tensor
 
 
@@ -172,3 +175,164 @@ def brier_score(state: dict) -> float:
     if state["brier_count"] == 0:
         return float("nan")
     return state["brier_sum"] / state["brier_count"]
+
+
+# -- mAP (chap. 7.4): instance-level average precision from a semantic model --
+#
+# The U-Net predicts per-pixel classes, not per-instance detections, so
+# "instances" here are the connected components of the predicted class mask
+# (chap. 6.1 justifies segmentation over detection, but chap. 7.4 still wants
+# a detection-style metric to sit next to IoU/Dice). Ground truth stays
+# instance-level (DamageSegDataset.instance_targets, distinct from the merged
+# training mask). AP uses COCO's 101-point interpolated precision-recall
+# integral; mAP is averaged over the 0.50:0.05:0.95 IoU thresholds, with
+# mAP@0.5 reported separately since it is the more common single number.
+#
+# Unlike the confusion matrix / calibration accumulators, this cannot reduce
+# a batch to a running sum online: precision at a given confidence depends on
+# every prediction ranked above it, so the accumulator keeps raw
+# (score, is_tp) pairs and only sorts/integrates in mean_average_precision().
+
+DEFAULT_IOU_THRESHOLDS: tuple[float, ...] = tuple(round(0.5 + 0.05 * i, 2) for i in range(10))
+
+
+def mask_iou(a: np.ndarray, b: np.ndarray) -> float:
+    """IoU between two boolean masks; 0.0 when both are empty (no match, not NaN)."""
+    inter = np.logical_and(a, b).sum()
+    union = np.logical_or(a, b).sum()
+    return float(inter) / float(union) if union > 0 else 0.0
+
+
+def connected_components(binary_mask: np.ndarray) -> list[np.ndarray]:
+    """8-connected components of a boolean mask, as a list of boolean masks."""
+    structure = np.ones((3, 3), dtype=int)
+    labeled, n = ndimage.label(binary_mask, structure=structure)
+    return [labeled == k for k in range(1, n + 1)]
+
+
+@torch.no_grad()
+def predicted_instances(
+    logits: Tensor, positive_classes: Sequence[int]
+) -> list[tuple[int, float, np.ndarray]]:
+    """Pseudo-detections for one image: one per connected component of the
+    argmax mask, per class in ``positive_classes`` (background excluded by the
+    caller). Score = mean softmax probability of that class over the
+    component's pixels. ``logits`` is K×H×W (single image, no batch dim).
+    """
+    probs = torch.softmax(logits, dim=0)
+    pred = probs.argmax(dim=0).cpu().numpy()
+    probs_np = probs.cpu().numpy()
+    instances: list[tuple[int, float, np.ndarray]] = []
+    for c in positive_classes:
+        for component in connected_components(pred == c):
+            score = float(probs_np[c][component].mean())
+            instances.append((c, score, component))
+    return instances
+
+
+def new_map(num_classes: int, iou_thresholds: Sequence[float] = DEFAULT_IOU_THRESHOLDS) -> dict:
+    """Zeroed streaming accumulator for mean average precision."""
+    thresholds = tuple(iou_thresholds)
+    if not thresholds:
+        raise ValueError("iou_thresholds must be non-empty")
+    return {
+        "num_classes": num_classes,
+        "iou_thresholds": thresholds,
+        "n_gt": dict.fromkeys(range(num_classes), 0),
+        "matches": {c: {t: [] for t in thresholds} for c in range(num_classes)},
+    }
+
+
+def map_update(
+    state: dict,
+    pred_instances: list[tuple[int, float, np.ndarray]],
+    gt_instances: list[tuple[int, np.ndarray]],
+) -> dict:
+    """Accumulate one image's predictions/ground truth (in place) and return `state`.
+
+    Standard greedy COCO-style matching per class per threshold: predictions
+    sorted by score descending, each claims its highest-IoU unclaimed ground
+    truth instance of the same class; a claim below ``threshold`` is a false
+    positive and leaves that ground truth instance available to a later
+    (lower-scoring) prediction.
+    """
+    for class_id, _mask in gt_instances:
+        state["n_gt"][class_id] = state["n_gt"].get(class_id, 0) + 1
+
+    preds_by_class: dict[int, list[tuple[float, np.ndarray]]] = {}
+    for class_id, score, mask in pred_instances:
+        preds_by_class.setdefault(class_id, []).append((score, mask))
+    gt_by_class: dict[int, list[np.ndarray]] = {}
+    for class_id, mask in gt_instances:
+        gt_by_class.setdefault(class_id, []).append(mask)
+
+    for threshold in state["iou_thresholds"]:
+        for class_id, preds in preds_by_class.items():
+            gt_masks = gt_by_class.get(class_id, [])
+            claimed = [False] * len(gt_masks)
+            for score, mask in sorted(preds, key=lambda p: -p[0]):
+                best_iou, best_j = 0.0, -1
+                for j, gt_mask in enumerate(gt_masks):
+                    if claimed[j]:
+                        continue
+                    iou = mask_iou(mask, gt_mask)
+                    if iou > best_iou:
+                        best_iou, best_j = iou, j
+                is_tp = best_iou >= threshold
+                if is_tp:
+                    claimed[best_j] = True
+                state["matches"][class_id][threshold].append((score, is_tp))
+    return state
+
+
+def _average_precision(matches: list[tuple[float, bool]], n_gt: int) -> float:
+    """COCO-style 101-point interpolated AP; NaN if the class has no ground truth."""
+    if n_gt == 0:
+        return float("nan")
+    if not matches:
+        return 0.0
+    tp_cum = fp_cum = 0
+    precisions, recalls = [], []
+    for _score, is_tp in sorted(matches, key=lambda m: -m[0]):
+        tp_cum += int(is_tp)
+        fp_cum += int(not is_tp)
+        precisions.append(tp_cum / (tp_cum + fp_cum))
+        recalls.append(tp_cum / n_gt)
+    precisions_arr = np.array(precisions)
+    recalls_arr = np.array(recalls)
+    total = 0.0
+    for level in range(101):
+        r = level / 100.0
+        at_or_above = precisions_arr[recalls_arr >= r]
+        total += float(at_or_above.max()) if at_or_above.size else 0.0
+    return total / 101.0
+
+
+def mean_average_precision(state: dict) -> dict:
+    """Finalize an mAP accumulator: per-class AP, mAP per threshold, and the
+    two headline numbers (``map_50``, ``map`` = mean over all thresholds).
+    Class 0 (background) is never a detection target and is excluded.
+    """
+    num_classes = state["num_classes"]
+    thresholds = state["iou_thresholds"]
+    ap_per_class: dict[int, dict[float, float]] = {
+        c: {
+            t: _average_precision(state["matches"][c][t], state["n_gt"].get(c, 0))
+            for t in thresholds
+        }
+        for c in range(1, num_classes)
+    }
+
+    def _mean(values: list[float]) -> float:
+        finite = [v for v in values if not math.isnan(v)]
+        return sum(finite) / len(finite) if finite else float("nan")
+
+    map_per_threshold = {
+        t: _mean([ap_per_class[c][t] for c in range(1, num_classes)]) for t in thresholds
+    }
+    return {
+        "ap_per_class": ap_per_class,
+        "map_per_threshold": map_per_threshold,
+        "map_50": map_per_threshold.get(0.5, float("nan")),
+        "map": _mean(list(map_per_threshold.values())),
+    }

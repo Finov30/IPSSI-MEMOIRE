@@ -9,10 +9,12 @@ the loss to drop measurably. This is a plumbing test, not a performance test.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 from PIL import Image
 from torch.utils.data import ConcatDataset, Subset
 
@@ -23,7 +25,9 @@ from memoire.training.train import (
     build_dataset,
     build_model,
     density_indices,
+    evaluate_map,
     flat_instance_counts,
+    flat_instance_targets,
     load_checkpoint,
     subset_indices,
     train,
@@ -336,6 +340,35 @@ def test_flat_instance_counts_concat_dataset_preserves_order(density_corpus):
     assert flat_instance_counts(combined) == [1, 1, 2, 2, 4, 4, 1, 1, 2, 2, 4, 4]
 
 
+def test_flat_instance_targets_matches_dataset(density_corpus):
+    coco_path, images_dir = density_corpus
+    config = {
+        "corpus": [str(coco_path)],
+        "images_root": str(images_dir),
+        "mode": "binary",
+        "input_size": IMG_SIZE,
+        "augment": False,
+    }
+    ds = build_dataset(config, "train")
+    targets = flat_instance_targets(ds)
+    assert [len(t) for t in targets] == [1, 1, 2, 2, 4, 4]
+
+
+def test_flat_instance_targets_concat_dataset_preserves_order(density_corpus):
+    coco_path, images_dir = density_corpus
+    config = {
+        "corpus": [str(coco_path)],
+        "images_root": str(images_dir),
+        "mode": "binary",
+        "input_size": IMG_SIZE,
+        "augment": False,
+    }
+    ds = build_dataset(config, "train")
+    combined = ConcatDataset([ds, ds])
+    targets = flat_instance_targets(combined)
+    assert [len(t) for t in targets] == [1, 1, 2, 2, 4, 4, 1, 1, 2, 2, 4, 4]
+
+
 def test_density_indices_filters_to_the_bucket():
     counts = [1, 1, 2, 2, 4, 4]
     indices = density_indices(counts, n_keep=2, seed=1, density_min=2, density_max=2)
@@ -551,3 +584,29 @@ def test_build_model_rejects_unknown_name():
             {"model": "resnet", "in_channels": 3, "base_channels": 8, "depth": 2, "gn_groups": 4},
             num_classes=2,
         )
+
+
+def test_evaluate_map_smoke(corpus, tmp_path):
+    # Not a performance test (see module docstring): just confirms the
+    # instance-level mAP pass (chap. 7.4/8.4) runs end to end on a real
+    # checkpoint and returns well-formed, finite-or-NaN numbers.
+    coco_path, images_dir = corpus
+    config = _config(coco_path, images_dir, tmp_path / "run-map", iterations=6, warmup_iterations=1, val_every=6)
+    summary = train(config)
+    checkpoint = load_checkpoint(Path(summary["output_dir"]) / "last.pt")
+    model = UNet(
+        in_channels=3,
+        num_classes=2,
+        base_channels=config["base_channels"],
+        depth=config["depth"],
+        gn_groups=config["gn_groups"],
+    )
+    model.load_state_dict(checkpoint["model_state"], strict=True)
+
+    val_dataset = build_dataset(config, "val")
+    result = evaluate_map(model, val_dataset, torch.device("cpu"), num_classes=2)
+
+    assert set(result) == {"ap_per_class", "map_per_threshold", "map_50", "map"}
+    assert set(result["ap_per_class"]) == {1}
+    for value in (result["map_50"], result["map"], *result["map_per_threshold"].values()):
+        assert (0.0 <= value <= 1.0) or math.isnan(value)

@@ -191,6 +191,18 @@ def flat_instance_counts(dataset: Dataset) -> list[int]:
     raise TypeError(f"unsupported dataset type for density sampling: {type(dataset)!r}")
 
 
+def flat_instance_targets(dataset: Dataset) -> list[list[tuple[int, np.ndarray]]]:
+    """Per-image list of instance ``(class_id, mask)``, flattened like :func:`flat_instance_counts`."""
+    if isinstance(dataset, DamageSegDataset):
+        return [dataset.instance_targets(i) for i in range(len(dataset))]
+    if isinstance(dataset, ConcatDataset):
+        targets: list[list[tuple[int, np.ndarray]]] = []
+        for child in dataset.datasets:
+            targets.extend(flat_instance_targets(child))
+        return targets
+    raise TypeError(f"unsupported dataset type for instance targets: {type(dataset)!r}")
+
+
 def density_indices(
     counts: Sequence[int], n_keep: int, seed: int, density_min: int, density_max: int | None
 ) -> list[int]:
@@ -304,6 +316,34 @@ def evaluate(
         "ece": seg_metrics.expected_calibration_error(calib),
         "brier_score": seg_metrics.brier_score(calib),
     }
+
+
+@torch.no_grad()
+def evaluate_map(
+    model: torch.nn.Module, dataset: Dataset, device: torch.device, num_classes: int
+) -> dict:
+    """Instance-level mAP over ``dataset`` (chap. 7.4/8.4): per-image connected-
+    component matching against real instance polygons, see
+    :func:`memoire.training.metrics.mean_average_precision`.
+
+    A chapter-8 final-results metric, not part of :func:`evaluate`'s cheap
+    streaming pass — instance matching is per-image and non-batchable, so
+    this loops one image at a time and is meant to run once per finished run,
+    not every ``val_every`` iterations.
+    """
+    was_training = model.training
+    model.eval()
+    targets = flat_instance_targets(dataset)
+    positive_classes = list(range(1, num_classes))
+    state = seg_metrics.new_map(num_classes)
+    for i in range(len(dataset)):
+        image, _mask = dataset[i]
+        logits = model(image.unsqueeze(0).to(device))[0]
+        pred = seg_metrics.predicted_instances(logits, positive_classes)
+        state = seg_metrics.map_update(state, pred, targets[i])
+    if was_training:
+        model.train()
+    return seg_metrics.mean_average_precision(state)
 
 
 # -- tracking -----------------------------------------------------------------

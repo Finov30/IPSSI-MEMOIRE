@@ -158,6 +158,52 @@ def test_instance_counts_per_image(synthetic):
     assert _make(synthetic, split="val").instance_counts == [0, 1]
 
 
+# --- instance targets (mAP, chap. 7.4) ---
+
+
+def test_instance_targets_stays_distinct_where_the_merged_mask_collapses(synthetic):
+    # c.png: dent (left half) + scratch (right half), non-overlapping so the
+    # merged mask (test_instance_counts_per_image) already shows 2 instances,
+    # but this asserts the per-instance API returns them as two separate
+    # (class_id, mask) entries rather than one collapsed region.
+    ds = _make(synthetic)
+    targets = ds.instance_targets(2)  # c.png
+    assert len(targets) == 2
+    class_ids = {class_id for class_id, _mask in targets}
+    assert class_ids == {1}  # binary mode: every instance is class 1
+    for _class_id, mask in targets:
+        assert mask.shape == (SIZE, SIZE)
+        assert mask.dtype == bool
+        assert mask.any()
+    # the two instance masks don't overlap (left half vs right half)
+    (_, mask_a), (_, mask_b) = targets
+    assert not np.logical_and(mask_a, mask_b).any()
+
+
+def test_instance_targets_empty_for_image_without_annotations(synthetic):
+    ds = _make(synthetic, split="val")
+    assert ds.instance_targets(0) == []  # d.png has no annotation
+
+
+def test_instance_targets_class_id_follows_taxonomy_in_multiclass_mode(synthetic):
+    tax = _make_taxonomy({"dent": "fine", "scratch": "large"})
+    ds = _make(synthetic, mode="multiclass", taxonomy=tax)
+    targets = ds.instance_targets(2)  # c.png: dent (fine=2), scratch (large=1)
+    assert {class_id for class_id, _mask in targets} == {1, 2}
+
+
+def test_instance_targets_mask_matches_getitem_merged_mask(synthetic):
+    # Union of the per-instance masks must equal the nonzero region of the
+    # merged mask __getitem__ returns for the same image.
+    ds = _make(synthetic)
+    _, merged_mask = ds[2]
+    targets = ds.instance_targets(2)
+    union = np.zeros((SIZE, SIZE), dtype=bool)
+    for _class_id, mask in targets:
+        union |= mask
+    assert np.array_equal(union, merged_mask.numpy() != 0)
+
+
 # --- shapes, dtypes, values ---
 
 

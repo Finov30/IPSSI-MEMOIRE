@@ -161,24 +161,53 @@ class DamageSegDataset(Dataset):
 
     # -- letterbox ------------------------------------------------------------
 
-    def _letterbox(self, image: Image.Image, mask: np.ndarray) -> tuple[Image.Image, np.ndarray]:
-        """Resize to fit ``input_size`` (ratio preserved) and pad with background."""
+    def _letterbox_geometry(self, width: int, height: int) -> tuple[int, int, int, int]:
+        """``(new_w, new_h, left, top)`` fitting ``width x height`` into ``input_size``."""
         size = self.input_size
-        width, height = image.size
         scale = min(size / width, size / height)
         new_w = max(1, round(width * scale))
         new_h = max(1, round(height * scale))
-
-        image = image.resize((new_w, new_h), Image.BILINEAR)
-        mask_img = Image.fromarray(mask, mode="L").resize((new_w, new_h), Image.NEAREST)
-
         left = (size - new_w) // 2
         top = (size - new_h) // 2
-        canvas = Image.new("RGB", (size, size), (0, 0, 0))
-        canvas.paste(image, (left, top))
-        out_mask = np.zeros((size, size), dtype=np.uint8)
+        return new_w, new_h, left, top
+
+    def _letterbox_mask(self, mask: np.ndarray, width: int, height: int) -> np.ndarray:
+        """Letterbox a single mask (NEAREST) onto this dataset's canvas geometry."""
+        new_w, new_h, left, top = self._letterbox_geometry(width, height)
+        mask_img = Image.fromarray(mask, mode="L").resize((new_w, new_h), Image.NEAREST)
+        out_mask = np.zeros((self.input_size, self.input_size), dtype=np.uint8)
         out_mask[top : top + new_h, left : left + new_w] = np.asarray(mask_img, dtype=np.uint8)
+        return out_mask
+
+    def _letterbox(self, image: Image.Image, mask: np.ndarray) -> tuple[Image.Image, np.ndarray]:
+        """Resize to fit ``input_size`` (ratio preserved) and pad with background."""
+        width, height = image.size
+        new_w, new_h, left, top = self._letterbox_geometry(width, height)
+        image = image.resize((new_w, new_h), Image.BILINEAR)
+        canvas = Image.new("RGB", (self.input_size, self.input_size), (0, 0, 0))
+        canvas.paste(image, (left, top))
+        out_mask = self._letterbox_mask(mask, width, height)
         return canvas, out_mask
+
+    def instance_targets(self, i: int) -> list[tuple[int, np.ndarray]]:
+        """Per-instance ``(class_id, letterboxed boolean mask)`` for image ``i``.
+
+        Unlike ``__getitem__``'s merged semantic mask (overlaps collapse to one
+        class per pixel), instances stay distinct here — needed for
+        instance-level mAP (chap. 7.4); the per-pixel train/val path never
+        needs this.
+        """
+        info = self.images[i]
+        width, height = info["width"], info["height"]
+        ann_ids = self._coco.getAnnIds(imgIds=[info["id"]])
+        targets: list[tuple[int, np.ndarray]] = []
+        for ann in self._coco.loadAnns(ann_ids):
+            if not ann.get("segmentation"):
+                continue
+            instance = self._coco.annToMask(ann)
+            class_id = 1 if self.mode == "binary" else self._class_index[ann["category_id"]]
+            targets.append((class_id, self._letterbox_mask(instance, width, height) > 0))
+        return targets
 
     # -- copy-paste augmentation -----------------------------------------------
 

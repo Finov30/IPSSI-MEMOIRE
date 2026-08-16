@@ -2,6 +2,7 @@
 
 import math
 
+import numpy as np
 import pytest
 import torch
 
@@ -9,12 +10,18 @@ from memoire.training.metrics import (
     brier_score,
     calibration_update,
     confusion_update,
+    connected_components,
     dice_per_class,
     expected_calibration_error,
     iou_per_class,
+    map_update,
+    mask_iou,
+    mean_average_precision,
     mean_iou,
     new_calibration,
     new_confusion,
+    new_map,
+    predicted_instances,
 )
 
 
@@ -208,3 +215,105 @@ class TestCalibration:
         state = new_calibration()
         with pytest.raises(ValueError):
             calibration_update(state, torch.randn(1, 2, 3, 3), torch.zeros(1, 2, 2, dtype=torch.int64))
+
+
+class TestMaskIouAndComponents:
+    def test_mask_iou_hand_computed(self):
+        a = np.zeros((4, 4), dtype=bool)
+        a[:2, :2] = True  # 4 pixels
+        b = np.zeros((4, 4), dtype=bool)
+        b[:2, :3] = True  # 6 pixels, overlaps a's 4 pixels entirely
+        assert mask_iou(a, b) == pytest.approx(4.0 / 6.0)
+
+    def test_mask_iou_empty_union_is_zero(self):
+        empty = np.zeros((3, 3), dtype=bool)
+        assert mask_iou(empty, empty) == 0.0
+
+    def test_connected_components_splits_disjoint_blobs(self):
+        mask = np.zeros((6, 6), dtype=bool)
+        mask[0:2, 0:2] = True
+        mask[4:6, 4:6] = True
+        components = connected_components(mask)
+        assert len(components) == 2
+        covered = np.zeros_like(mask)
+        for comp in components:
+            assert comp.shape == mask.shape
+            covered |= comp
+        assert np.array_equal(covered, mask)
+
+    def test_connected_components_empty_mask_is_empty_list(self):
+        assert connected_components(np.zeros((4, 4), dtype=bool)) == []
+
+
+class TestPredictedInstances:
+    def test_extracts_one_instance_per_component_with_mean_score(self):
+        # K=2, 4x4: top-left 2x2 strongly favors class 1, rest favors class 0.
+        logits = torch.full((2, 4, 4), -5.0)
+        logits[1, :2, :2] = 5.0
+        instances = predicted_instances(logits, positive_classes=[1])
+        assert len(instances) == 1
+        class_id, score, mask = instances[0]
+        assert class_id == 1
+        assert score == pytest.approx(torch.softmax(logits, dim=0)[1, 0, 0].item(), rel=1e-5)
+        assert mask.sum() == 4
+
+    def test_no_instances_when_class_never_predicted(self):
+        logits = torch.zeros(2, 3, 3)
+        logits[0] += 5.0  # class 0 wins everywhere
+        assert predicted_instances(logits, positive_classes=[1]) == []
+
+
+class TestMeanAveragePrecision:
+    def _mask(self, region: tuple[slice, slice]) -> np.ndarray:
+        mask = np.zeros((4, 4), dtype=bool)
+        mask[region] = True
+        return mask
+
+    def test_hand_computed_ap_one_tp_one_fp(self):
+        # 1 class, 2 images, single threshold=0.5.
+        # Image A: pred exactly matches GT (IoU=1.0, score=0.9) -> TP.
+        # Image B: pred and GT disjoint (IoU=0.0, score=0.8) -> FP.
+        # n_gt=2 total. Matches sorted by score: [(0.9,TP),(0.8,FP)].
+        # precision/recall points: (1.0, 0.5) then (0.5, 0.5).
+        # 101-pt interpolation: precision=1.0 for r in [0,0.5] (51 points),
+        # 0.0 for r in (0.5,1.0] (50 points) -> AP = 51/101.
+        top_left = self._mask((slice(0, 2), slice(0, 2)))
+        bottom_right = self._mask((slice(2, 4), slice(2, 4)))
+        state = new_map(num_classes=2, iou_thresholds=(0.5,))
+        map_update(state, [(1, 0.9, top_left)], [(1, top_left)])
+        map_update(state, [(1, 0.8, top_left)], [(1, bottom_right)])
+        result = mean_average_precision(state)
+        expected_ap = 51.0 / 101.0
+        assert result["ap_per_class"][1][0.5] == pytest.approx(expected_ap)
+        assert result["map_50"] == pytest.approx(expected_ap)
+        assert result["map"] == pytest.approx(expected_ap)
+
+    def test_perfect_predictions_give_map_one_across_default_thresholds(self):
+        region = self._mask((slice(0, 2), slice(0, 2)))
+        state = new_map(num_classes=2)  # default 0.50:0.05:0.95 thresholds
+        map_update(state, [(1, 0.99, region)], [(1, region)])
+        result = mean_average_precision(state)
+        assert result["map_50"] == pytest.approx(1.0)
+        assert result["map"] == pytest.approx(1.0)
+
+    def test_missed_ground_truth_instance_is_never_a_free_tp(self):
+        region = self._mask((slice(0, 2), slice(0, 2)))
+        state = new_map(num_classes=2, iou_thresholds=(0.5,))
+        map_update(state, [], [(1, region)])  # no prediction at all for a real instance
+        result = mean_average_precision(state)
+        assert result["ap_per_class"][1][0.5] == pytest.approx(0.0)
+
+    def test_background_class_excluded_from_results(self):
+        result = mean_average_precision(new_map(num_classes=3, iou_thresholds=(0.5,)))
+        assert 0 not in result["ap_per_class"]
+        assert set(result["ap_per_class"]) == {1, 2}
+
+    def test_empty_accumulator_is_nan(self):
+        result = mean_average_precision(new_map(num_classes=2, iou_thresholds=(0.5,)))
+        assert math.isnan(result["map_50"])
+        assert math.isnan(result["map"])
+        assert math.isnan(result["ap_per_class"][1][0.5])
+
+    def test_rejects_empty_iou_thresholds(self):
+        with pytest.raises(ValueError):
+            new_map(num_classes=2, iou_thresholds=())

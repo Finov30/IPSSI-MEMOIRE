@@ -86,7 +86,16 @@ via `model: unet | baseline` dans la config (`build_model()` dans `train.py`).
 class DiceCELoss(nn.Module):  # ce_weight, dice_weight ; logits B×K×H×W, target B×H×W
 def confusion_update(...)     # accumulation streaming
 def iou_per_class(...) -> dict[int, float] ; dice_per_class(...) -> dict[int, float]
+def calibration_update(...)   # accumulation streaming ; expected_calibration_error / brier_score
 ```
+
+mAP (chap. 7.4/8.4) : le U-Net prédit par pixel, pas par instance — les « détections » sont
+les composantes connexes du masque argmax par classe, notées par la probabilité moyenne de la
+classe sur la composante ; l'AP compare au polygone d'instance réel (`DamageSegDataset.
+instance_targets`, distinct du masque fusionné d'entraînement) par IoU de masque, interpolation
+101 points façon COCO, moyennée sur les seuils 0.50:0.05:0.95. Coûteux (appariement par image,
+non batchable) : passe dédiée (`evaluate_map()`, `scripts/evaluate_map.py --checkpoint ...`),
+jamais dans la boucle `val_every` d'`evaluate()`.
 
 ### Boucle (`src/memoire/training/train.py` + `configs/train.yaml`)
 
