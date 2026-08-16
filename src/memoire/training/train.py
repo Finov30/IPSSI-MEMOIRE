@@ -36,6 +36,7 @@ import torch
 from torch.utils.data import ConcatDataset, DataLoader, Dataset, Subset
 
 from memoire.data.taxonomy import load_taxonomy
+from memoire.model.baseline import PlainEncoderDecoder
 from memoire.model.unet import UNet
 from memoire.training import metrics as seg_metrics
 from memoire.training.dataset import MULTICLASS_GROUP_NAMES, DamageSegDataset
@@ -49,6 +50,7 @@ DEFAULTS: dict[str, Any] = {
     "images_root": None,
     "mode": "binary",  # "binary" | "multiclass" (background/large/fine, chap. 6.4)
     "taxonomy_path": "configs/taxonomy.yaml",  # needed for multiclass's large/fine grouping
+    "model": "unet",  # "unet" | "baseline" (no skip connections, chap. 6.5 ablation reference)
     "input_size": 512,
     "in_channels": 3,
     "base_channels": 32,
@@ -138,6 +140,26 @@ def num_classes_for(config: dict) -> int:
     if config["mode"] == "binary":
         return 2
     return len(MULTICLASS_GROUP_NAMES)
+
+
+_MODEL_CLASSES: dict[str, type[torch.nn.Module]] = {
+    "unet": UNet,
+    "baseline": PlainEncoderDecoder,
+}
+
+
+def build_model(config: dict, num_classes: int) -> torch.nn.Module:
+    """Instantiate the architecture named by ``config["model"]`` (chap. 6.5)."""
+    name = config["model"]
+    if name not in _MODEL_CLASSES:
+        raise ValueError(f"unknown model '{name}', expected one of {sorted(_MODEL_CLASSES)}")
+    return _MODEL_CLASSES[name](
+        in_channels=int(config["in_channels"]),
+        num_classes=num_classes,
+        base_channels=int(config["base_channels"]),
+        depth=int(config["depth"]),
+        gn_groups=int(config["gn_groups"]),
+    )
 
 
 # -- data ---------------------------------------------------------------------
@@ -449,13 +471,7 @@ def train(config: dict) -> dict:
 
     # Model / optimisation.
     num_classes = num_classes_for(config)
-    model = UNet(
-        in_channels=int(config["in_channels"]),
-        num_classes=num_classes,
-        base_channels=int(config["base_channels"]),
-        depth=int(config["depth"]),
-        gn_groups=int(config["gn_groups"]),
-    ).to(device)
+    model = build_model(config, num_classes).to(device)
     loss_fn = DiceCELoss(
         ce_weight=float(config["ce_weight"]), dice_weight=float(config["dice_weight"])
     )

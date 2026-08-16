@@ -69,6 +69,17 @@ class UNet(nn.Module):
     # forward : B×C×H×W -> B×num_classes×H×W (logits, même H×W)
 ```
 
+### Modèle de référence pour l'ablation (`src/memoire/model/baseline.py`, chap. 6.5)
+
+```python
+class PlainEncoderDecoder(nn.Module):  # même signature que UNet
+```
+
+Même profondeur, mêmes canaux, GroupNorm, init He, décodeur bilinéaire — seule différence :
+aucune concaténation skip encodeur→décodeur. Isole ce qu'apporte spécifiquement l'architecture
+U-Net (au-delà de la simple capacité), à profondeur/normalisation/init identiques. Sélection
+via `model: unet | baseline` dans la config (`build_model()` dans `train.py`).
+
 ### Losses / métriques (`src/memoire/training/losses.py`, `metrics.py`)
 
 ```python

@@ -25,7 +25,9 @@ mode: binary                          # binary (2 classes) | multiclass (3:
 taxonomy_path: configs/taxonomy.yaml  # large/fine grouping source (multiclass only)
 input_size: 512       # letterbox target, must be a multiple of 2**depth
 
-# --- model (U-Net from scratch, random init only) ----------------------------
+# --- model (from scratch, random init only) -----------------------------------
+model: unet   # unet | baseline (PlainEncoderDecoder, no skip connections —
+              # chap. 6.5 ablation reference, matched depth/channels/norm/init)
 in_channels: 3
 base_channels: 32
 depth: 4

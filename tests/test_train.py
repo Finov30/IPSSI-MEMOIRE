@@ -16,10 +16,12 @@ import pytest
 from PIL import Image
 from torch.utils.data import ConcatDataset, Subset
 
+from memoire.model.baseline import PlainEncoderDecoder
 from memoire.model.unet import UNet
 from memoire.training.train import (
     _iter_damage_datasets,
     build_dataset,
+    build_model,
     density_indices,
     flat_instance_counts,
     load_checkpoint,
@@ -507,3 +509,45 @@ def test_train_with_copy_paste_enabled_completes(corpus, tmp_path):
     summary = train(config)
     assert len(summary["train_losses"]) == 6
     assert all(np.isfinite(summary["train_losses"]))
+
+
+def test_train_with_baseline_ablation_model_completes(corpus, tmp_path):
+    # chap. 6.5: the no-skip-connection reference model must be selectable
+    # and trainable through the exact same loop as the U-Net.
+    coco_path, images_dir = corpus
+    config = _config(
+        coco_path,
+        images_dir,
+        tmp_path / "run-baseline",
+        model="baseline",
+        iterations=6,
+        warmup_iterations=1,
+        val_every=6,
+    )
+    summary = train(config)
+    assert len(summary["train_losses"]) == 6
+    assert all(np.isfinite(summary["train_losses"]))
+    checkpoint = load_checkpoint(Path(summary["output_dir"]) / "last.pt")
+    model = PlainEncoderDecoder(
+        in_channels=3,
+        num_classes=2,
+        base_channels=config["base_channels"],
+        depth=config["depth"],
+        gn_groups=config["gn_groups"],
+    )
+    model.load_state_dict(checkpoint["model_state"], strict=True)
+
+
+def test_build_model_dispatches_on_config_name():
+    unet_config = {"model": "unet", "in_channels": 3, "base_channels": 8, "depth": 2, "gn_groups": 4}
+    baseline_config = {**unet_config, "model": "baseline"}
+    assert isinstance(build_model(unet_config, num_classes=2), UNet)
+    assert isinstance(build_model(baseline_config, num_classes=2), PlainEncoderDecoder)
+
+
+def test_build_model_rejects_unknown_name():
+    with pytest.raises(ValueError, match="unknown model"):
+        build_model(
+            {"model": "resnet", "in_channels": 3, "base_channels": 8, "depth": 2, "gn_groups": 4},
+            num_classes=2,
+        )
