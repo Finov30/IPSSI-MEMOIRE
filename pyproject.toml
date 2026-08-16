@@ -25,6 +25,9 @@ train = [
 spark = [
     "pyspark>=3.5,<5.0",
 ]
+data = [
+    "dvc>=3.50",
+]
 
 [build-system]
 requires = ["setuptools>=68"]

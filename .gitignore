@@ -1,6 +1,7 @@
-# Données — jamais dans git (DVC plus tard)
+# Données — jamais dans git ; data/processed est versionné par DVC
+# (data/processed.dvc, tracké, pointe vers le contenu réel)
 /data-raw
-/data/
+/data/processed/
 *.zip
 *.tar
 *.blend

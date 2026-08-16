@@ -16,7 +16,7 @@ scripts/             Points d'entrée (construction du corpus, etc.)
 tests/               Tests pytest (synthétiques + realdata)
 docs/                Conventions du pipeline
 data-raw -> ~/memoire-datasets   (symlink, hors git)
-data/processed/      Sorties de conversion (hors git, DVC à venir)
+data/processed/      Sorties de conversion (hors git, versionnées par DVC — data/processed.dvc)
 ```
 
 ## Corpus
@@ -42,6 +42,20 @@ uv run python scripts/build_corpus.py
 (modèle, boucle d'entraînement, courbe de volume) l'importent. `spark` (pyspark,
 nécessite un JVM) n'est utile que pour `scripts/spark_build_corpus.py` et
 `docker compose run spark ...` ; voir `docker-compose.yml` et `airflow/`.
+
+## Versionnement des données (DVC, chap. 5.6)
+
+`data/processed/` (exports COCO harmonisés, `stats.parquet`, `REPORT.md`) n'est jamais dans git —
+seul `data/processed.dvc` (hash + taille) l'est, ce qui rattache chaque commit à une version
+précise et vérifiable des données sans committer de binaires.
+
+```bash
+uv pip install -e '.[data]'
+dvc remote add --local -d local <chemin-de-stockage>   # une fois par machine, jamais dans git
+uv run python scripts/build_corpus.py                  # régénère data/processed/
+uv run dvc add data/processed && uv run dvc push        # nouvelle version + upload
+uv run dvc pull                                         # récupère la version référencée par le commit courant
+```
 
 ## Garde-fous
 
