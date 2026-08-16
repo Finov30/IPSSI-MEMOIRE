@@ -242,4 +242,12 @@ def load_records(root: Path) -> list[dict]:
         )
     merge_session_groups(records)
     link_thumbnail_groups(records)
+    # Namespaced last, after the timestamp parsing/merging above (which needs
+    # the bare "DDMMYYYY_HHMMSS" form) — cardd.py/hitl.py already prefix their
+    # group_id with their source name; without it here, the cross-corpus
+    # anti-leak check's collision-freedom depended on VehiDE's raw timestamp
+    # format never colliding with "cardd/..."/"hitl/..." strings (true today,
+    # not an enforced invariant).
+    for rec in records:
+        rec["group_id"] = f"{SOURCE}/{rec['group_id']}"
     return records

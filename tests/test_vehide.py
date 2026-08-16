@@ -207,7 +207,7 @@ def test_load_records_synthetic(synthetic_root, caplog):
     assert first["source"] == "vehide"
     assert first["split_hint"] == "train"
     assert (first["width"], first["height"]) == (32, 24)
-    assert first["group_id"] == "01012020_172204"
+    assert first["group_id"] == "vehide/01012020_172204"
     assert Path(first["file_path"]).is_absolute()
     assert Path(first["file_path"]).exists()
     # Le polygone dégénéré est ignoré : une seule instance survit.
@@ -217,9 +217,11 @@ def test_load_records_synthetic(synthetic_root, caplog):
     assert first["instances"][0]["bbox"] == [0.0, 0.0, 20.0, 10.0]
 
     # Deux photos de la même session partagent le group_id.
-    assert by_id["vehide/01012020_172204image999999"]["group_id"] == "01012020_172204"
+    assert by_id["vehide/01012020_172204image999999"]["group_id"] == "vehide/01012020_172204"
     # Nom hors motif : group_id singleton = nom de fichier.
-    assert by_id["vehide/z1692240140997_deadbeef"]["group_id"] == "z1692240140997_deadbeef.jpg"
+    assert (
+        by_id["vehide/z1692240140997_deadbeef"]["group_id"] == "vehide/z1692240140997_deadbeef.jpg"
+    )
 
     val_rec = by_id["vehide/02022020_080000image1"]
     assert val_rec["split_hint"] == "val"

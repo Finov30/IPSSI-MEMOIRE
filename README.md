@@ -46,7 +46,8 @@ nécessite un JVM) n'est utile que pour `scripts/spark_build_corpus.py` et
 ## Garde-fous
 
 - **Split par véhicule/session, jamais par image** — `check_no_leak` lève si un groupe
-  apparaît dans deux splits (contrôle destiné à devenir bloquant en CI).
+  apparaît dans deux splits ; bloquant en CI (`tests/test_splits.py`) et exécuté en conditions
+  réelles à chaque construction du corpus.
 - **Taxonomie explicite** — aucune fusion de classes implicite : chaque décision
   (mapper / conserver / exclure) est dans `configs/taxonomy.yaml` avec sa justification.
 - **Comptages de contrôle** — les loaders sont testés contre les volumes vérifiés à la main.

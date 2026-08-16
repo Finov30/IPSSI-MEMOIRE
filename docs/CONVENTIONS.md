@@ -35,8 +35,11 @@ Règles :
 - Aucune classe n'est traduite/fusionnée dans les loaders — l'harmonisation est le rôle exclusif
   de `taxonomy.py` (config `configs/taxonomy.yaml`), pour que l'arbitrage reste documentable (chap. 4.5).
 - `group_id` : CarDD n'a pas d'identifiant véhicule → `group_id = image_id` (mais splits officiels
-  conservés via `split_hint`). VehiDE : préfixe horodaté du nom de fichier (photos d'une même session
-  = même véhicule). HitL : `image_id`.
+  conservés via `split_hint`). VehiDE : `vehide/<préfixe horodaté du nom de fichier>` (photos d'une
+  même session = même véhicule ; préfixe `vehide/` ajouté après fusion des sessions/thumbnails, qui
+  opèrent sur l'horodatage brut). HitL : `image_id`. Les trois sources préfixent désormais leur
+  `group_id` par leur nom (défense en profondeur pour l'anti-fuite sur l'union des corpus, pas
+  seulement par corpus).
 
 ## Chiffres de contrôle (comptage direct, juillet 2026 — source : sujet v2)
 
@@ -59,5 +62,7 @@ Cracked). Le loader lit `Car parts dataset/` et le vérifie par les noms de clas
 
 - Jamais de split par image : split par `group_id` (véhicule/sinistre).
 - `splits.py` fournit `check_no_leak(splits) -> None` qui lève si un `group_id` apparaît dans
-  deux splits — ce contrôle sera branché en CI (bloquant).
+  deux splits — **bloquant en CI** (`tests/test_splits.py`, aucun test n'est marqué `realdata`,
+  donc jamais sauté ; exécuté aussi en conditions réelles à chaque `build_corpus.py`, par
+  corpus et sur l'union des trois).
 - Seeds fixées et tracées ; échantillonnage stratifié par densité d'instances.
