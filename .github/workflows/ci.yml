@@ -21,9 +21,13 @@ jobs:
       # Torch from the CPU wheel index: the default index would pull the CUDA
       # build (several GB of useless wheels on a CI runner). MLflow (train
       # extra) is deliberately not installed: tracking is optional by design
-      # and CI exercises the JSONL fallback path.
-      - name: Install torch (CPU wheels)
-        run: uv pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.2"
+      # and CI exercises the JSONL fallback path. scipy IS installed: unlike
+      # mlflow it's a hard import (metrics.py's mAP connected components),
+      # not an optional soft dependency.
+      - name: Install torch (CPU wheels) and scipy
+        run: |
+          uv pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.2"
+          uv pip install "scipy>=1.10"
 
       - name: Ruff
         run: uv run --no-sync ruff check src scripts tests
