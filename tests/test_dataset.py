@@ -247,6 +247,58 @@ def test_multiclass_grouping_is_consistent_across_corpora_with_different_local_i
     assert mask_a[32, 54] == mask_b[32, 54]  # both 'scratch' -> same value (1, 'large')
 
 
+# --- copy-paste augmentation (chap. 7.3) ---
+
+
+def test_copy_paste_disabled_by_default(synthetic):
+    assert _make(synthetic).copy_paste is False
+
+
+def test_copy_paste_rejects_invalid_prob(synthetic):
+    with pytest.raises(ValueError, match="copy_paste_prob"):
+        _make(synthetic, copy_paste=True, copy_paste_prob=1.5)
+
+
+def test_copy_paste_pastes_an_instance_from_another_image(synthetic):
+    ds = _make(synthetic, copy_paste=True, generator=torch.Generator().manual_seed(3))
+    blank_image = Image.new("RGB", (SIZE, SIZE), (128, 128, 128))
+    blank_mask = np.zeros((SIZE, SIZE), dtype=np.uint8)
+    _, pasted_mask = ds._copy_paste(blank_image, blank_mask)
+    assert pasted_mask.sum() > 0  # every train image has >=1 instance, so something lands
+
+
+def test_copy_paste_never_fires_when_probability_is_zero(synthetic):
+    gen = torch.Generator().manual_seed(0)
+    ds = _make(
+        synthetic, split="val", augment=False, copy_paste=True, copy_paste_prob=0.0, generator=gen
+    )
+    _, mask = ds[0]  # d.png, no annotation — any paste would make this non-zero
+    assert int(mask.sum()) == 0
+
+
+def test_copy_paste_deterministic_at_fixed_seed(synthetic):
+    blank_image = Image.new("RGB", (SIZE, SIZE), (128, 128, 128))
+    ds_a = _make(synthetic, copy_paste=True, generator=torch.Generator().manual_seed(11))
+    ds_b = _make(synthetic, copy_paste=True, generator=torch.Generator().manual_seed(11))
+    _, mask_a = ds_a._copy_paste(blank_image, np.zeros((SIZE, SIZE), dtype=np.uint8))
+    _, mask_b = ds_b._copy_paste(blank_image, np.zeros((SIZE, SIZE), dtype=np.uint8))
+    assert np.array_equal(mask_a, mask_b)
+
+
+def test_copy_paste_leaves_target_unchanged_when_source_has_no_instances(synthetic):
+    ds = _make(synthetic, copy_paste=True, generator=torch.Generator().manual_seed(0))
+    target_image = Image.new("RGB", (SIZE, SIZE), (200, 200, 200))
+    target_mask = np.zeros((SIZE, SIZE), dtype=np.uint8)
+    target_mask[0, 0] = 1  # sentinel: untouched iff the early-return path fires
+    ds._load_letterboxed = lambda i: (  # stub source with an empty mask
+        Image.new("RGB", (SIZE, SIZE), (0, 0, 0)),
+        np.zeros((SIZE, SIZE), dtype=np.uint8),
+    )
+    out_image, out_mask = ds._copy_paste(target_image, target_mask)
+    assert out_mask[0, 0] == 1
+    assert out_image is target_image
+
+
 def test_empty_annotations_give_empty_mask(synthetic):
     image, mask = _make(synthetic, split="val")[0]  # d.png, no annotation
     assert int(mask.sum()) == 0

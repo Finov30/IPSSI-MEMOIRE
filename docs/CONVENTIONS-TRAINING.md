@@ -33,8 +33,10 @@ class DamageSegDataset(torch.utils.data.Dataset):
     def __init__(self, coco_json: Path, images_root: Path | None, split: str,
                  mode: str = "binary",       # "binary" | "multiclass"
                  input_size: int = 512,
-                 augment: bool = False,      # flips horizontaux uniquement pour l'instant
-                 taxonomy: Taxonomy | None = None)  # requis si mode="multiclass"
+                 augment: bool = False,      # flips horizontaux + copy-paste (ci-dessous)
+                 taxonomy: Taxonomy | None = None,  # requis si mode="multiclass"
+                 copy_paste: bool = False,   # Ghiasi et al. 2021 (chap. 7.3), ablation H3
+                 copy_paste_prob: float = 0.5)
     def __getitem__(self, i) -> tuple[Tensor, Tensor]
         # image : float32 C×H×W dans [0,1] ; masque : int64 H×W
         # binaire : {0 fond, 1 dommage} ; multiclasse : {0 fond, 1 large, 2 fine}
@@ -44,6 +46,13 @@ Le regroupement multiclasse est global (via `Taxonomy.size()`, sur le nom canoni
 de la catégorie), jamais dérivé de la liste `categories` locale à un fichier COCO —
 sinon combiner plusieurs corpus désaligne silencieusement les valeurs de masque
 d'un fichier à l'autre (bug réel trouvé et corrigé : voir l'historique git).
+
+**Copy-paste** (`copy_paste=True`, train split uniquement, désactivé par défaut) : avec
+probabilité `copy_paste_prob`, colle sur l'image cible (dans l'espace déjà letterboxé) une
+instance d'une autre image du même split, redimensionnée aléatoirement (jitter d'échelle
+0.5×-1.5×, Ghiasi et al. 2021). Substitut endogène au corpus cible — aucune donnée externe —
+pour l'ablation H3 (chap. 7.3). Utilise `self.generator`, donc bénéficie du même correctif de
+décorrélation par worker que le flip.
 
 - Source : les JSON COCO de `data/processed/` (champ `split` présent dans chaque image,
   champ `memoire_image_id` = identité complète, `file_name` = basename).

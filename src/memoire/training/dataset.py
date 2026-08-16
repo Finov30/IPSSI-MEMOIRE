@@ -63,6 +63,8 @@ class DamageSegDataset(Dataset):
         augment: bool = False,
         generator: torch.Generator | None = None,
         taxonomy: Taxonomy | None = None,
+        copy_paste: bool = False,
+        copy_paste_prob: float = 0.5,
     ) -> None:
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
@@ -72,6 +74,8 @@ class DamageSegDataset(Dataset):
             raise ValueError(
                 "mode='multiclass' requires a taxonomy (background/large/fine grouping, chap. 6.4)"
             )
+        if not 0.0 <= copy_paste_prob <= 1.0:
+            raise ValueError(f"copy_paste_prob must be in [0, 1], got {copy_paste_prob}")
 
         self.coco_json = Path(coco_json)
         self.images_root = Path(images_root) if images_root is not None else None
@@ -80,6 +84,8 @@ class DamageSegDataset(Dataset):
         self.input_size = int(input_size)
         self.augment = augment
         self.generator = generator
+        self.copy_paste = copy_paste
+        self.copy_paste_prob = float(copy_paste_prob)
 
         with self.coco_json.open("r", encoding="utf-8") as fh:
             dataset = json.load(fh)
@@ -174,16 +180,79 @@ class DamageSegDataset(Dataset):
         out_mask[top : top + new_h, left : left + new_w] = np.asarray(mask_img, dtype=np.uint8)
         return canvas, out_mask
 
+    # -- copy-paste augmentation -----------------------------------------------
+
+    def _load_letterboxed(self, i: int) -> tuple[Image.Image, np.ndarray]:
+        """Letterboxed ``(image, mask)`` for index ``i``, before any augmentation."""
+        info = self.images[i]
+        image = Image.open(self._paths[i]).convert("RGB")
+        mask = self._build_mask(info)
+        return self._letterbox(image, mask)
+
+    def _copy_paste(self, image: Image.Image, mask: np.ndarray) -> tuple[Image.Image, np.ndarray]:
+        """Paste a randomly scaled instance from another training image onto
+        this one (Ghiasi et al. 2021, chap. 7.3): a substitute for
+        pre-training that stays strictly endogenous to the target corpus (no
+        external data) — increases object/context diversity by recombining
+        instances already in the training split.
+
+        Operates in letterboxed canvas space (both images already the same
+        ``input_size``), not native resolution — pixels/mask values are
+        copied only where the (possibly rescaled) source mask is non-zero, so
+        the source's own background never overwrites the target.
+        """
+        source_idx = int(torch.randint(0, len(self), (1,), generator=self.generator).item())
+        src_image, src_mask = self._load_letterboxed(source_idx)
+        if not bool((src_mask > 0).any()):
+            return image, mask  # nothing to paste (e.g. an unannotated image)
+
+        size = self.input_size
+        scale = float(
+            torch.empty((), dtype=torch.float32).uniform_(0.5, 1.5, generator=self.generator)
+        )
+        new_size = max(1, round(size * scale))
+        src_image_np = np.asarray(src_image.resize((new_size, new_size), Image.BILINEAR))
+        src_mask_np = np.asarray(
+            Image.fromarray(src_mask, mode="L").resize((new_size, new_size), Image.NEAREST)
+        )
+
+        # Scaled source may be larger than the canvas: crop to fit before placing.
+        crop = min(new_size, size)
+        src_image_np = src_image_np[:crop, :crop]
+        src_mask_np = src_mask_np[:crop, :crop]
+
+        max_offset = size - crop
+        if max_offset > 0:
+            off_x = int(torch.randint(0, max_offset + 1, (1,), generator=self.generator).item())
+            off_y = int(torch.randint(0, max_offset + 1, (1,), generator=self.generator).item())
+        else:
+            off_x = off_y = 0
+
+        target_image_np = np.asarray(image).copy()
+        paste = src_mask_np > 0
+        ys, xs = slice(off_y, off_y + crop), slice(off_x, off_x + crop)
+        region_image = target_image_np[ys, xs]
+        region_mask = mask[ys, xs]
+        region_image[paste] = src_image_np[paste]
+        region_mask[paste] = src_mask_np[paste]
+        target_image_np[ys, xs] = region_image
+        mask[ys, xs] = region_mask
+        return Image.fromarray(target_image_np), mask
+
     # -- Dataset API ----------------------------------------------------------
 
     def __len__(self) -> int:
         return len(self.images)
 
     def __getitem__(self, i: int) -> tuple[torch.Tensor, torch.Tensor]:
-        info = self.images[i]
-        image = Image.open(self._paths[i]).convert("RGB")
-        mask = self._build_mask(info)
-        image, mask = self._letterbox(image, mask)
+        image, mask = self._load_letterboxed(i)
+
+        if (
+            self.augment
+            and self.copy_paste
+            and bool(torch.rand((), generator=self.generator) < self.copy_paste_prob)
+        ):
+            image, mask = self._copy_paste(image, mask)
 
         image_t = torch.from_numpy(np.asarray(image, dtype=np.float32) / 255.0)
         image_t = image_t.permute(2, 0, 1).contiguous()

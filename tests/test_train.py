@@ -486,3 +486,24 @@ def test_binary_training_combines_multiple_corpora(tmp_path):
     assert summary["num_train_images"] == 5 + 3
     assert summary["num_val_images"] == 2 + 1
     assert all(np.isfinite(summary["train_losses"]))
+
+
+# --- copy-paste augmentation config wiring (chap. 7.3) ---
+
+
+def test_train_with_copy_paste_enabled_completes(corpus, tmp_path):
+    coco_path, images_dir = corpus
+    config = _config(
+        coco_path,
+        images_dir,
+        tmp_path / "run-copy-paste",
+        augment=True,
+        copy_paste=True,
+        copy_paste_prob=1.0,
+        iterations=6,
+        warmup_iterations=1,
+        val_every=6,
+    )
+    summary = train(config)
+    assert len(summary["train_losses"]) == 6
+    assert all(np.isfinite(summary["train_losses"]))

@@ -35,6 +35,8 @@ gn_groups: 8
 batch_size: 4
 num_workers: 0
 augment: true         # horizontal flips on the train split only
+copy_paste: false     # Ghiasi et al. 2021 (chap. 7.3) — endogenous H3 ablation
+copy_paste_prob: 0.5  # per train-item probability, only when copy_paste=true
 subset_n_images: null # deterministic train subsampling (data-volume curve)
 density_bucket: null  # [min, max|null] instances/image; null = volume axis
                        # (chap. 7.1) — requires subset_n_images (volume held

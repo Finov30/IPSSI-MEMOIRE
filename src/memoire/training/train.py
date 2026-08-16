@@ -57,6 +57,8 @@ DEFAULTS: dict[str, Any] = {
     "batch_size": 4,
     "num_workers": 0,
     "augment": True,
+    "copy_paste": False,        # Ghiasi et al. 2021 (chap. 7.3), endogenous H3 ablation
+    "copy_paste_prob": 0.5,     # per train-item probability, only when copy_paste=True
     "subset_n_images": None,
     "density_bucket": None,  # [min, max|null] instances/image; null = volume axis
     "lr": 3.0e-4,
@@ -213,6 +215,8 @@ def build_dataset(config: dict, split: str, generator: torch.Generator | None = 
             augment=bool(config["augment"]) and split == "train",
             generator=generator,
             taxonomy=taxonomy,
+            copy_paste=bool(config.get("copy_paste", False)),
+            copy_paste_prob=float(config.get("copy_paste_prob", 0.5)),
         )
         for corpus_json in config["corpus"]
     ]
