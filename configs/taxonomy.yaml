@@ -18,6 +18,19 @@
 #   - description : définition courte en français (taxonomie fine, 13 classes).
 #   - group       : regroupement large (7 groupes) pour les analyses/évaluations
 #                   à granularité grossière.
+#   - size        : {large, fine} — mode d'entraînement multiclasse (chap. 6.4).
+#                   Le sujet prescrit "binaire d'abord, puis 3 classes"
+#                   (background + larges + fines), jamais les 13 classes
+#                   canoniques (intraitable sous la contrainte from-scratch
+#                   stricte : plusieurs classes n'auraient presque aucune
+#                   instance aux petits points de la courbe de volume).
+#                   Critère : échec au niveau du composant entier (large,
+#                   ex. vitre/pneu/optique cassé) vs défaut surfacique ou
+#                   linéaire localisé (fine, ex. rayure/fissure/éclat). Le
+#                   sujet donne 6 exemples explicites (glass_shatter,
+#                   tire_flat, lamp_broken = larges ; dent, scratch, crack =
+#                   fines) ; les 7 autres classes sont étendues ici selon le
+#                   même critère, arbitrage documenté par classe ci-dessous.
 #
 # Effectifs d'instances vérifiés par comptage direct sur les annotations
 # (août 2026) ; ils sont rappelés dans les notes pour documenter l'arbitrage.
@@ -26,42 +39,55 @@ canonical_classes:
   scratch:
     description: "Rayure superficielle de la peinture ou du vernis, sans déformation de la tôle."
     group: surface
+    size: fine  # explicite sujet §6.4
   dent:
     description: "Bosse ou enfoncement de la carrosserie, déformation sans rupture du matériau."
     group: deformation
+    size: fine  # explicite sujet §6.4
   crack:
     description: "Fissure du matériau (pare-chocs, carrosserie, plastique) sans séparation complète."
     group: rupture
+    size: fine  # explicite sujet §6.4
   tear:
     description: "Déchirure du matériau (typiquement pare-chocs plastique), plus sévère qu'une fissure."
     group: rupture
+    size: fine  # rupture linéaire du matériau, pas un composant entier cassé — même nature que crack
   puncture:
     description: "Perforation traversante de la carrosserie ou d'un élément."
     group: rupture
+    size: fine  # perforation localisée, pas un composant entier cassé
   broken_part:
     description: "Pièce cassée mais toujours présente sur le véhicule."
     group: rupture
+    size: large  # échec au niveau du composant entier, comme lamp_broken/tire_flat
   glass_shatter:
     description: "Vitrage brisé ou étoilé (pare-brise, vitres latérales, lunette)."
     group: vitrage
+    size: large  # explicite sujet §6.4
   lamp_broken:
     description: "Optique cassé (phare, feu arrière, clignotant)."
     group: optique
+    size: large  # explicite sujet §6.4
   tire_flat:
     description: "Pneu crevé ou dégonflé."
     group: pneumatique
+    size: large  # explicite sujet §6.4
   missing_part:
     description: "Pièce absente du véhicule (arrachée ou déposée)."
     group: perte_de_piece
+    size: large  # absence totale d'une pièce = échec au niveau du composant
   paint_chip:
     description: "Éclat de peinture localisé laissant apparaître l'apprêt ou le métal."
     group: surface
+    size: fine  # éclat surfacique localisé
   flaking:
     description: "Écaillage de la peinture sur une zone étendue."
     group: surface
+    size: fine  # défaut de peinture surfacique, pas un composant cassé
   corrosion:
     description: "Corrosion ou rouille de la carrosserie."
     group: surface
+    size: fine  # dommage chimique diffus et surfacique, pas un composant cassé
 
 sources:
   vehide:

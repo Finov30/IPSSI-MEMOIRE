@@ -387,3 +387,102 @@ def test_train_density_bucket_without_subset_n_images_raises(density_corpus, tmp
     )
     with pytest.raises(ValueError, match="density_bucket requires subset_n_images"):
         train(config)
+
+
+# --- multi-corpus combination (binary mode) ---
+
+
+def _make_standalone_corpus(root: Path, source: str, n_train: int, n_val: int) -> Path:
+    """A COCO JSON using ``memoire_file_path`` (like real build_corpus.py output),
+    so it needs no shared ``images_root`` — safe to combine with another corpus
+    living under a completely different directory.
+    """
+    images_dir = root / "images"
+    images_dir.mkdir(parents=True)
+    images, annotations = [], []
+    for i in range(n_train + n_val):
+        split = "train" if i < n_train else "val"
+        pixels = np.full((IMG_SIZE, IMG_SIZE, 3), 30, dtype=np.uint8)
+        x0, y0, w, h = 6, 6, 24, 18
+        pixels[y0 : y0 + h, x0 : x0 + w] = 220
+        file_name = f"{source}_{i:03d}.png"
+        file_path = images_dir / file_name
+        Image.fromarray(pixels).save(file_path)
+        image_id = i + 1
+        images.append(
+            {
+                "id": image_id,
+                "file_name": file_name,
+                "width": IMG_SIZE,
+                "height": IMG_SIZE,
+                "split": split,
+                "source": source,
+                "memoire_image_id": f"{source}/{i:03d}",
+                "group_id": f"{source}/{i:03d}",
+                "memoire_file_path": str(file_path),
+            }
+        )
+        annotations.append(
+            {
+                "id": image_id,
+                "image_id": image_id,
+                "category_id": 1,
+                "segmentation": [
+                    [
+                        float(x0), float(y0),
+                        float(x0 + w), float(y0),
+                        float(x0 + w), float(y0 + h),
+                        float(x0), float(y0 + h),
+                    ]
+                ],
+                "bbox": [float(x0), float(y0), float(w), float(h)],
+                "area": float(w * h),
+                "iscrowd": 0,
+            }
+        )
+    coco = {
+        "info": {"description": f"standalone corpus {source}"},
+        "licenses": [],
+        "images": images,
+        "annotations": annotations,
+        "categories": [{"id": 1, "name": "scratch", "supercategory": "damage"}],
+    }
+    coco_path = root / f"{source}.json"
+    coco_path.write_text(json.dumps(coco), encoding="utf-8")
+    return coco_path
+
+
+def test_binary_training_combines_multiple_corpora(tmp_path):
+    # Two independent corpora (own images, own directories, no shared
+    # images_root) mirroring a real corpus=[cardd.json, vehide.json, hitl.json]
+    # config. Binary mode never touches per-corpus class ids (unlike
+    # multiclass), so combining sources is safe.
+    corpus_a = _make_standalone_corpus(tmp_path / "source_a", "sourcea", n_train=5, n_val=2)
+    corpus_b = _make_standalone_corpus(tmp_path / "source_b", "sourceb", n_train=3, n_val=1)
+
+    config = {
+        "seed": 123,
+        "corpus": [str(corpus_a), str(corpus_b)],
+        "images_root": None,
+        "mode": "binary",
+        "input_size": IMG_SIZE,
+        "base_channels": 8,
+        "depth": 2,
+        "gn_groups": 4,
+        "batch_size": 4,
+        "num_workers": 0,
+        "augment": False,
+        "lr": 3.0e-3,
+        "weight_decay": 0.0,
+        "iterations": 4,
+        "warmup_iterations": 1,
+        "val_every": 4,
+        "device": "cpu",
+        "subset_n_images": None,
+        "output_dir": str(tmp_path / "run-multi-corpus"),
+        "mlflow": {"tracking_uri": None},
+    }
+    summary = train(config)
+    assert summary["num_train_images"] == 5 + 3
+    assert summary["num_val_images"] == 2 + 1
+    assert all(np.isfinite(summary["train_losses"]))

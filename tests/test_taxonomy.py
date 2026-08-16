@@ -122,6 +122,45 @@ def test_every_expected_canonical_exists(taxonomy):
     assert expected_canonicals == set(taxonomy.canonical_names)
 
 
+# --- size grouping (chap. 6.4: multiclass = background/large/fine) ---
+
+EXPECTED_LARGE = {"broken_part", "glass_shatter", "lamp_broken", "tire_flat", "missing_part"}
+EXPECTED_FINE = {
+    "scratch", "dent", "crack", "tear", "puncture", "paint_chip", "flaking", "corrosion",
+}
+
+
+def test_every_canonical_class_has_a_size(taxonomy):
+    for name in taxonomy.canonical_names:
+        assert taxonomy.size(name) in {"large", "fine"}
+
+
+def test_size_grouping_matches_the_documented_split(taxonomy):
+    assert EXPECTED_LARGE | EXPECTED_FINE == set(taxonomy.canonical_names)
+    assert EXPECTED_LARGE.isdisjoint(EXPECTED_FINE)
+    for name in EXPECTED_LARGE:
+        assert taxonomy.size(name) == "large"
+    for name in EXPECTED_FINE:
+        assert taxonomy.size(name) == "fine"
+
+
+def test_size_raises_on_unknown_class(taxonomy):
+    with pytest.raises(UnknownClassError):
+        taxonomy.size("definitely_not_a_class")
+
+
+def test_size_raises_when_unset(tmp_path):
+    tax = load_taxonomy(_write(tmp_path, MINIMAL_YAML))
+    with pytest.raises(TaxonomyConfigError, match="size"):
+        tax.size("scratch")
+
+
+def test_load_rejects_invalid_size(tmp_path):
+    bad = MINIMAL_YAML.replace("group: surface", "group: surface\n    size: medium")
+    with pytest.raises(TaxonomyConfigError):
+        load_taxonomy(_write(tmp_path, bad))
+
+
 def test_shared_classes_bridge_at_least_two_sources(taxonomy):
     reachable_from = {}
     for source, classes in EXPECTED.items():

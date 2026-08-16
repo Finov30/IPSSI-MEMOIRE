@@ -15,6 +15,7 @@ from pathlib import Path
 import yaml
 
 VALID_DECISIONS = frozenset({"map", "keep_specific", "exclude"})
+VALID_SIZES = frozenset({"large", "fine"})
 
 _SNAKE_CASE_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 
@@ -45,11 +46,19 @@ class CoverageError(TaxonomyError):
 
 @dataclass(frozen=True)
 class CanonicalClass:
-    """Classe canonique : nom snake_case, description fr, groupe large."""
+    """Classe canonique : nom snake_case, description fr, groupe large.
+
+    ``size`` (chap. 6.4, optionnel) : regroupement à 2 valeurs {large, fine}
+    utilisé par le mode multiclasse d'entraînement (background + larges +
+    fines) — pas les 13 classes canoniques, intraitables sous la contrainte
+    from-scratch stricte. ``None`` tant que non renseigné dans le yaml ;
+    ``Taxonomy.size()`` lève si consultée sans valeur.
+    """
 
     name: str
     description: str
     group: str
+    size: str | None = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +93,11 @@ class Taxonomy:
                 raise TaxonomyConfigError(
                     f"Canonical class {name!r} must have a non-empty "
                     "'description' and 'group'"
+                )
+            if cls.size is not None and cls.size not in VALID_SIZES:
+                raise TaxonomyConfigError(
+                    f"Canonical class {name!r}: invalid size {cls.size!r}; "
+                    f"expected one of {sorted(VALID_SIZES)} or unset"
                 )
         for source, classes in self._mappings.items():
             for source_class, mapping in classes.items():
@@ -135,6 +149,24 @@ class Taxonomy:
             raise UnknownClassError(
                 f"Unknown canonical class {canonical_name!r}"
             ) from None
+
+    def size(self, canonical_name: str) -> str:
+        """Regroupement large/fine (chap. 6.4) d'une classe canonique.
+
+        Lève ``UnknownClassError`` si la classe est inconnue, ou
+        ``TaxonomyConfigError`` si elle est connue mais sans ``size`` renseigné
+        dans le yaml (jamais None silencieux pour l'entraînement multiclasse).
+        """
+        try:
+            cls = self._canonical_classes[canonical_name]
+        except KeyError:
+            raise UnknownClassError(f"Unknown canonical class {canonical_name!r}") from None
+        if cls.size is None:
+            raise TaxonomyConfigError(
+                f"Canonical class {canonical_name!r} has no 'size' (large/fine) "
+                "set in the taxonomy — required for multiclass training"
+            )
+        return cls.size
 
     def mapping(self, source: str, source_class: str) -> ClassMapping:
         """Arbitrage complet (canonical, decision, note) d'une classe source."""
@@ -204,10 +236,12 @@ def load_taxonomy(path: str | Path) -> Taxonomy:
         where = f"canonical_classes/{name}"
         if not isinstance(spec, dict):
             raise TaxonomyConfigError(f"{where}: must be a mapping")
+        size = spec.get("size")
         canonical_classes[str(name)] = CanonicalClass(
             name=str(name),
             description=_require_str(spec.get("description"), where, "description"),
             group=_require_str(spec.get("group"), where, "group"),
+            size=_require_str(size, where, "size") if size is not None else None,
         )
 
     mappings: dict[str, dict[str, ClassMapping]] = {}

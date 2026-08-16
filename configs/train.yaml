@@ -18,8 +18,11 @@ corpus:
 images_root: null
 
 # --- task --------------------------------------------------------------------
-mode: binary          # binary | multiclass
-num_classes: null     # derived from mode when null (binary: 2, multiclass: 14)
+mode: binary                          # binary (2 classes) | multiclass (3:
+                                       # background/large/fine, chap. 6.4 — not
+                                       # the 13 canonical classes, intraitable
+                                       # sous la contrainte from-scratch stricte)
+taxonomy_path: configs/taxonomy.yaml  # large/fine grouping source (multiclass only)
 input_size: 512       # letterbox target, must be a multiple of 2**depth
 
 # --- model (U-Net from scratch, random init only) ----------------------------

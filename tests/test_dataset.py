@@ -11,12 +11,22 @@ import pytest
 import torch
 from PIL import Image
 
+from memoire.data.taxonomy import CanonicalClass, Taxonomy
 from memoire.training.dataset import DamageSegDataset
 
 PROCESSED = Path(__file__).resolve().parents[1] / "data" / "processed"
 REAL_ROOT = Path(os.environ.get("MEMOIRE_DATASETS", "/home/hdcc5629/memoire-datasets")) / "cardd"
 
 SIZE = 64  # input_size used by the synthetic tests
+
+
+def _make_taxonomy(sizes: dict[str, str]) -> Taxonomy:
+    """Minimal in-memory Taxonomy exposing only .size() (no source mappings needed)."""
+    canonical = {
+        name: CanonicalClass(name=name, description="test", group="test", size=size)
+        for name, size in sizes.items()
+    }
+    return Taxonomy(canonical, {})
 
 
 def _save_png(path: Path, width: int, height: int, columns: list[tuple[int, int, int]]) -> None:
@@ -128,10 +138,16 @@ def test_invalid_mode_raises(synthetic):
         _make(synthetic, mode="panoptic")
 
 
+def test_multiclass_requires_taxonomy(synthetic):
+    with pytest.raises(ValueError, match="taxonomy"):
+        _make(synthetic, mode="multiclass")
+
+
 def test_class_names(synthetic):
     assert _make(synthetic).class_names == ["background", "damage"]
-    ds = _make(synthetic, mode="multiclass")
-    assert ds.class_names == ["background", "dent", "scratch"]
+    tax = _make_taxonomy({"dent": "fine", "scratch": "large"})
+    ds = _make(synthetic, mode="multiclass", taxonomy=tax)
+    assert ds.class_names == ["background", "large", "fine"]
     assert ds.num_classes == 3
 
 
@@ -161,11 +177,74 @@ def test_binary_mask_matches_annotation(synthetic):
     assert (mask[:, 33:] == 0).all()
 
 
-def test_multiclass_mask_follows_category_order(synthetic):
-    _, mask = _make(synthetic, mode="multiclass")[2]  # c.png
+def test_multiclass_mask_follows_taxonomy_size_not_local_category_id(synthetic):
+    # dent has the lower local category id (1) but is mapped to 'fine' (index
+    # 2) here — the reverse of the old alphabetical-by-local-id order — to
+    # prove grouping now follows the taxonomy, not each file's own id order.
+    tax = _make_taxonomy({"dent": "fine", "scratch": "large"})
+    _, mask = _make(synthetic, mode="multiclass", taxonomy=tax)[2]  # c.png
     assert set(mask.unique().tolist()) == {1, 2}  # full-frame annotations, no background
-    assert mask[32, 10] == 1  # 'dent' (category id 1) on the left
-    assert mask[32, 54] == 2  # 'scratch' (category id 2) on the right
+    assert mask[32, 10] == 2  # 'dent' (local category id 1) on the left -> 'fine'
+    assert mask[32, 54] == 1  # 'scratch' (local category id 2) on the right -> 'large'
+
+
+def test_multiclass_grouping_is_consistent_across_corpora_with_different_local_ids(
+    synthetic, tmp_path
+):
+    """Regression test: combining two corpus JSONs used to silently misalign
+    multiclass mask values, because each file numbered its own `categories`
+    list alphabetically (local, per-file order). Build a second synthetic
+    corpus whose local category ids for the SAME two canonical class names
+    are swapped relative to `synthetic`, and confirm both datasets agree on
+    every mask value once grouped through the shared taxonomy.
+    """
+    tax = _make_taxonomy({"dent": "fine", "scratch": "large"})
+    images_root = tmp_path / "images2"
+    images_root.mkdir()
+    _save_png(images_root / "c2.png", 40, 40, [(0, 40, 255)])
+    coco = {
+        "info": {"description": "swapped-id corpus"},
+        "licenses": [],
+        "images": [
+            {"id": 1, "file_name": "c2.png", "width": 40, "height": 40, "split": "train",
+             "memoire_image_id": "swapped/c2"},
+        ],
+        "annotations": [
+            # Left half = 'dent' semantically -> category_id=2 in THIS
+            # corpus's categories list (id1=scratch, id2=dent here, the
+            # reverse of `synthetic`'s fixture) — same geometry as c.png,
+            # deliberately different local ids for the same canonical classes.
+            {"id": 1, "image_id": 1, "category_id": 2,
+             "segmentation": [_rect_polygon(0, 0, 20, 40)],
+             "bbox": [0, 0, 20, 40], "area": 800.0, "iscrowd": 0},
+            {"id": 2, "image_id": 1, "category_id": 1,
+             "segmentation": [_rect_polygon(20, 0, 40, 40)],
+             "bbox": [20, 0, 20, 40], "area": 800.0, "iscrowd": 0},
+        ],
+        # Local ids intentionally reversed vs. `synthetic`'s fixture: here
+        # 'scratch' is id 1 and 'dent' is id 2 (alphabetical-by-id would have
+        # numbered them oppositely to the first corpus).
+        "categories": [
+            {"id": 1, "name": "scratch", "supercategory": "damage"},
+            {"id": 2, "name": "dent", "supercategory": "damage"},
+        ],
+    }
+    coco_json = tmp_path / "swapped.json"
+    coco_json.write_text(json.dumps(coco), encoding="utf-8")
+
+    ds_a = DamageSegDataset(
+        synthetic["coco_json"], synthetic["images_root"], split="train",
+        mode="multiclass", input_size=SIZE, taxonomy=tax,
+    )
+    ds_b = DamageSegDataset(
+        coco_json, images_root, split="train", mode="multiclass", input_size=SIZE, taxonomy=tax,
+    )
+    assert ds_a.class_names == ds_b.class_names == ["background", "large", "fine"]
+
+    _, mask_a = ds_a[2]  # c.png: dent left, scratch right
+    _, mask_b = ds_b[0]  # c2.png: dent left, scratch right (same layout)
+    assert mask_a[32, 10] == mask_b[32, 10]  # both 'dent' -> same value (2, 'fine')
+    assert mask_a[32, 54] == mask_b[32, 54]  # both 'scratch' -> same value (1, 'large')
 
 
 def test_empty_annotations_give_empty_mask(synthetic):

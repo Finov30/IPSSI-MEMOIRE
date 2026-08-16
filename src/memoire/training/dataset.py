@@ -25,7 +25,17 @@ from PIL import Image
 from pycocotools.coco import COCO
 from torch.utils.data import Dataset
 
+from memoire.data.taxonomy import Taxonomy
+
 MODES = ("binary", "multiclass")
+
+# Fixed, corpus-independent order for multiclass mode (chap. 6.4): background
+# + the two size groups. Never derived from a COCO file's own local
+# `categories` list — that numbering is per-file (alphabetical order of
+# whatever canonical classes happen to appear in that one export), so
+# combining several corpus JSONs used to silently misalign mask values
+# (mask value 2 meaning a different canonical class per source).
+MULTICLASS_GROUP_NAMES = ("background", "large", "fine")
 
 
 class DamageSegDataset(Dataset):
@@ -34,8 +44,10 @@ class DamageSegDataset(Dataset):
     ``__getitem__`` returns ``(image, mask)`` with ``image`` a float32
     ``3xSxS`` tensor in ``[0, 1]`` and ``mask`` an int64 ``SxS`` tensor
     (``S = input_size``). Mask values: ``{0: background, 1: damage}`` in
-    binary mode, ``{0: background, 1..K}`` in multiclass mode, where class
-    ``k`` is the k-th entry of the JSON ``categories`` sorted by id.
+    binary mode; ``{0: background, 1: large, 2: fine}`` in multiclass mode
+    (chap. 6.4 — not the 13 canonical classes), via ``taxonomy.size()``, fixed
+    regardless of which corpus JSON this is (multiclass mode requires
+    ``taxonomy``).
 
     The image file is resolved from the ``memoire_file_path`` extra when
     present, otherwise from ``images_root / file_name``.
@@ -50,11 +62,16 @@ class DamageSegDataset(Dataset):
         input_size: int = 512,
         augment: bool = False,
         generator: torch.Generator | None = None,
+        taxonomy: Taxonomy | None = None,
     ) -> None:
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
         if input_size <= 0:
             raise ValueError(f"input_size must be positive, got {input_size}")
+        if mode == "multiclass" and taxonomy is None:
+            raise ValueError(
+                "mode='multiclass' requires a taxonomy (background/large/fine grouping, chap. 6.4)"
+            )
 
         self.coco_json = Path(coco_json)
         self.images_root = Path(images_root) if images_root is not None else None
@@ -73,11 +90,21 @@ class DamageSegDataset(Dataset):
             self._coco.createIndex()
 
         categories = sorted(dataset.get("categories", []), key=lambda cat: cat["id"])
-        self._class_index = {cat["id"]: i for i, cat in enumerate(categories, start=1)}
         if mode == "binary":
+            # Union of all instances regardless of class (_build_mask never
+            # consults _class_index in binary mode).
+            self._class_index = {}
             self.class_names = ["background", "damage"]
         else:
-            self.class_names = ["background"] + [cat["name"] for cat in categories]
+            # Global mapping: every category's canonical NAME (already the
+            # taxonomy-harmonised name at export time) determines its group id
+            # via the taxonomy, fixed regardless of this file's own local
+            # category ids — see MULTICLASS_GROUP_NAMES above.
+            self._class_index = {
+                cat["id"]: MULTICLASS_GROUP_NAMES.index(taxonomy.size(cat["name"]))
+                for cat in categories
+            }
+            self.class_names = list(MULTICLASS_GROUP_NAMES)
         self.num_classes = len(self.class_names)
 
         self.images = [img for img in dataset["images"] if img.get("split") == split]

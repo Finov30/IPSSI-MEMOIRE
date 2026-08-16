@@ -75,6 +75,7 @@ def memoire_pipeline():
 
         from memoire.data import cardd, hitl, vehide
         from memoire.data.coco_export import export_coco
+        from memoire.data.image_check import filter_unreadable
         from memoire.data.spark_pipeline import make_group_split_spark
         from memoire.data.splits import check_no_leak
         from memoire.data.taxonomy import ExcludedClassError, load_taxonomy
@@ -85,9 +86,14 @@ def memoire_pipeline():
             "cardd": (cardd.load_records, "cardd"),
             "hitl": (hitl.load_records, "humans-in-the-loop"),
         }
-        corpora = {
-            source: loader(DATASETS_ROOT / subdir) for source, (loader, subdir) in loaders.items()
-        }
+        corpora = {}
+        for source, (loader, subdir) in loaders.items():
+            records = loader(DATASETS_ROOT / subdir)
+            # A file existing with valid metadata doesn't mean it decodes —
+            # some real JPEGs are truncated; drop and count rather than let a
+            # corrupted file crash a training task hours into a run.
+            records, _n_corrupted, _n_corrupted_instances = filter_unreadable(records, source)
+            corpora[source] = records
 
         spark = (
             SparkSession.builder.appName("memoire-airflow-prepare").master("local[*]").getOrCreate()
@@ -148,6 +154,11 @@ def memoire_pipeline():
 
         base_config = yaml.safe_load((REPO_ROOT / "configs" / "train.yaml").read_text())
         base_config["corpus"] = [str(corpus_json)]
+        # Absolutised like every other path here (see prepare_corpus): the
+        # config file's own default is the relative "configs/taxonomy.yaml",
+        # which would otherwise depend on this task's cwd happening to be
+        # REPO_ROOT rather than being guaranteed by this file.
+        base_config["taxonomy_path"] = str(REPO_ROOT / "configs" / "taxonomy.yaml")
         config, run_dir = build_run_config(base_config, point, seed, CAMPAIGN_ROOT, iterations=None)
         for key, value in (params.get("overrides") or {}).items():
             _apply_override(config, key, value)

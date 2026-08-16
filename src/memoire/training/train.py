@@ -35,22 +35,20 @@ import numpy as np
 import torch
 from torch.utils.data import ConcatDataset, DataLoader, Dataset, Subset
 
+from memoire.data.taxonomy import load_taxonomy
 from memoire.model.unet import UNet
 from memoire.training import metrics as seg_metrics
-from memoire.training.dataset import DamageSegDataset
+from memoire.training.dataset import MULTICLASS_GROUP_NAMES, DamageSegDataset
 from memoire.training.losses import DiceCELoss
 
 logger = logging.getLogger("memoire.training")
-
-#: Canonical damage classes of ``configs/taxonomy.yaml`` (multiclass adds background).
-NUM_CANONICAL_DAMAGE_CLASSES = 13
 
 DEFAULTS: dict[str, Any] = {
     "seed": 42,
     "corpus": ["data/processed/cardd.json"],
     "images_root": None,
-    "mode": "binary",  # "binary" | "multiclass"
-    "num_classes": None,  # derived from mode when null
+    "mode": "binary",  # "binary" | "multiclass" (background/large/fine, chap. 6.4)
+    "taxonomy_path": "configs/taxonomy.yaml",  # needed for multiclass's large/fine grouping
     "input_size": 512,
     "in_channels": 3,
     "base_channels": 32,
@@ -134,10 +132,10 @@ def resolve_device(spec: str) -> torch.device:
 
 
 def num_classes_for(config: dict) -> int:
-    """2 in binary mode; configured (or 13 canonical + background) in multiclass."""
+    """2 in binary mode; 3 in multiclass mode (background/large/fine, chap. 6.4)."""
     if config["mode"] == "binary":
         return 2
-    return int(config.get("num_classes") or NUM_CANONICAL_DAMAGE_CLASSES + 1)
+    return len(MULTICLASS_GROUP_NAMES)
 
 
 # -- data ---------------------------------------------------------------------
@@ -200,6 +198,11 @@ def density_indices(
 def build_dataset(config: dict, split: str, generator: torch.Generator | None = None) -> Dataset:
     """Concatenate one :class:`DamageSegDataset` per corpus JSON for ``split``."""
     images_root = config.get("images_root")
+    # One shared Taxonomy for every corpus (chap. 6.4's large/fine grouping is
+    # global, not per-file) — loaded once here rather than per-DamageSegDataset.
+    taxonomy = (
+        load_taxonomy(config["taxonomy_path"]) if config["mode"] == "multiclass" else None
+    )
     datasets: list[Dataset] = [
         DamageSegDataset(
             coco_json=Path(corpus_json),
@@ -209,6 +212,7 @@ def build_dataset(config: dict, split: str, generator: torch.Generator | None = 
             input_size=int(config["input_size"]),
             augment=bool(config["augment"]) and split == "train",
             generator=generator,
+            taxonomy=taxonomy,
         )
         for corpus_json in config["corpus"]
     ]

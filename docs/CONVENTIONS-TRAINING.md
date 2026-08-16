@@ -10,8 +10,12 @@ Complète `docs/CONVENTIONS.md` (Phase 1 — données). Contrainte absolue du m�
   s'effondre à ce régime). Un test vérifie qu'aucun `nn.BatchNorm*` n'existe dans le modèle.
 - **Initialisation gaussienne He** (√(2/N), `kaiming_normal_`) sur les convolutions.
 - **Loss Dice + Cross-Entropy** (somme pondérée, poids configurables).
-- **Segmentation binaire d'abord** (dommage vs fond), mode multiclasse (13 classes
-  canoniques de `configs/taxonomy.yaml`) prévu par la même API.
+- **Segmentation binaire d'abord** (dommage vs fond), mode multiclasse (3 classes —
+  fond/larges/fines, chap. 6.4 ; jamais les 13 classes canoniques de
+  `configs/taxonomy.yaml`, intraitables sous la contrainte from-scratch stricte)
+  prévu par la même API. Le regroupement large/fine par classe canonique est
+  documenté et arbitré dans `configs/taxonomy.yaml` (champ `size`), jamais
+  dans le code.
 - **Schedule long** : le nombre d'itérations est un paramètre de config, jamais codé en dur.
 - **Résolution homogène** : redimensionnement à `input_size` configurable (défaut 512×512,
   letterbox avec padding pour préserver le ratio) — neutralisation de la variable confondante
@@ -29,11 +33,17 @@ class DamageSegDataset(torch.utils.data.Dataset):
     def __init__(self, coco_json: Path, images_root: Path | None, split: str,
                  mode: str = "binary",       # "binary" | "multiclass"
                  input_size: int = 512,
-                 augment: bool = False)      # flips horizontaux uniquement pour l'instant
+                 augment: bool = False,      # flips horizontaux uniquement pour l'instant
+                 taxonomy: Taxonomy | None = None)  # requis si mode="multiclass"
     def __getitem__(self, i) -> tuple[Tensor, Tensor]
         # image : float32 C×H×W dans [0,1] ; masque : int64 H×W
-        # binaire : {0 fond, 1 dommage} ; multiclasse : {0 fond, 1..K classes canoniques}
+        # binaire : {0 fond, 1 dommage} ; multiclasse : {0 fond, 1 large, 2 fine}
 ```
+
+Le regroupement multiclasse est global (via `Taxonomy.size()`, sur le nom canonique
+de la catégorie), jamais dérivé de la liste `categories` locale à un fichier COCO —
+sinon combiner plusieurs corpus désaligne silencieusement les valeurs de masque
+d'un fichier à l'autre (bug réel trouvé et corrigé : voir l'historique git).
 
 - Source : les JSON COCO de `data/processed/` (champ `split` présent dans chaque image,
   champ `memoire_image_id` = identité complète, `file_name` = basename).
