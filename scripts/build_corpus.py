@@ -23,6 +23,7 @@ import pandas as pd
 
 from memoire.data import cardd, hitl, vehide
 from memoire.data.coco_export import export_coco
+from memoire.data.image_check import filter_unreadable
 from memoire.data.splits import check_no_leak, make_group_split
 from memoire.data.stats import aggregate_by_source, compute_stats
 from memoire.data.taxonomy import ExcludedClassError, Taxonomy, load_taxonomy
@@ -106,6 +107,10 @@ def load_all(datasets_root: Path) -> tuple[dict[str, list[dict]], dict[str, dict
         started = time.perf_counter()
         try:
             records = loader(datasets_root / subdir)
+            # A file existing with valid metadata doesn't mean it decodes —
+            # some real JPEGs are truncated (chap. 4.4). Never train on one
+            # silently crashing a run hours in; drop and count it here.
+            records, n_corrupted, n_corrupted_instances = filter_unreadable(records, source)
         finally:
             module_logger.removeHandler(handler)
             module_logger.setLevel(previous_level)
@@ -113,6 +118,8 @@ def load_all(datasets_root: Path) -> tuple[dict[str, list[dict]], dict[str, dict
         corpora[source] = records
         metrics[source] = {
             "load_seconds": elapsed,
+            "corrupted_images_dropped": n_corrupted,
+            "corrupted_instances_dropped": n_corrupted_instances,
             **count_degenerates(handler.messages, source),
         }
         logger.info(
@@ -198,24 +205,41 @@ def compare_to_controls(
         n_images = len(records)
         n_instances = sum(len(r["instances"]) for r in records)
         dropped = metrics[source]["dropped_instances"]
+        n_corrupted = metrics[source]["corrupted_images_dropped"]
+        n_corrupted_instances = metrics[source]["corrupted_instances_dropped"]
+        explained_instance_drop = dropped + n_corrupted_instances
         if n_images != control["images"]:
-            discrepancies.append(
-                f"{source}: {n_images} images vs {control['images']} attendues "
-                f"(écart {n_images - control['images']:+d}, non expliqué)"
-            )
+            image_gap = control["images"] - n_images
+            if image_gap == n_corrupted:
+                discrepancies.append(
+                    f"{source}: {n_images} images vs {control['images']} attendues "
+                    f"— écart de {image_gap} entièrement expliqué par {n_corrupted} "
+                    f"fichier(s) image corrompu(s)/illisible(s) ignoré(s) par le loader"
+                )
+            else:
+                discrepancies.append(
+                    f"{source}: {n_images} images vs {control['images']} attendues "
+                    f"(écart {image_gap:+d}, dont {n_corrupted} corrompu(s) — reste "
+                    f"{image_gap - n_corrupted} non expliqué)"
+                )
         if n_instances != control["instances"]:
             gap = control["instances"] - n_instances
-            if gap == dropped:
+            if gap == explained_instance_drop:
+                extra = (
+                    f" et {n_corrupted_instances} sur des images corrompues ignorées"
+                    if n_corrupted_instances
+                    else ""
+                )
                 discrepancies.append(
                     f"{source}: {n_instances} instances vs {control['instances']} attendues "
                     f"— écart de {gap} entièrement expliqué par {dropped} polygone(s) "
-                    f"dégénéré(s) (aire nulle ou < 3 points) ignoré(s) par le loader"
+                    f"dégénéré(s) (aire nulle ou < 3 points) ignoré(s) par le loader{extra}"
                 )
             else:
                 discrepancies.append(
                     f"{source}: {n_instances} instances vs {control['instances']} attendues "
-                    f"(écart {gap}, dont {dropped} dégénéré(s) — reste {gap - dropped} "
-                    f"non expliqué)"
+                    f"(écart {gap}, dont {dropped} dégénéré(s) et {n_corrupted_instances} sur "
+                    f"images corrompues — reste {gap - explained_instance_drop} non expliqué)"
                 )
     return discrepancies
 
@@ -249,14 +273,15 @@ def write_report(
     lines.append("## Comptages vs chiffres de contrôle (docs/CONVENTIONS.md)")
     lines.append("")
     lines.append(
-        "| Corpus | Images | Images attendues | Instances | Instances attendues "
-        "| Polygones dégénérés ignorés |"
+        "| Corpus | Images | Images attendues | Images corrompues ignorées "
+        "| Instances | Instances attendues | Polygones dégénérés ignorés |"
     )
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|")
     for source, control in CONTROL_FIGURES.items():
         records = corpora[source]
         lines.append(
             f"| {source} | {len(records)} | {control['images']} "
+            f"| {metrics[source]['corrupted_images_dropped']} "
             f"| {sum(len(r['instances']) for r in records)} | {control['instances']} "
             f"| {metrics[source]['dropped_instances']} |"
         )
