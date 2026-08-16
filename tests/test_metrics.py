@@ -6,10 +6,14 @@ import pytest
 import torch
 
 from memoire.training.metrics import (
+    brier_score,
+    calibration_update,
     confusion_update,
     dice_per_class,
+    expected_calibration_error,
     iou_per_class,
     mean_iou,
+    new_calibration,
     new_confusion,
 )
 
@@ -133,3 +137,74 @@ class TestInputForms:
     def test_rejects_shape_mismatch(self):
         with pytest.raises(ValueError):
             confusion_update(new_confusion(2), torch.tensor([[0, 1, 0]]), torch.tensor([[0, 1]]))
+
+
+class TestCalibration:
+    # 4 single-pixel "images", K=2, logits chosen so softmax gives exact
+    # round numbers: softmax([0, ln(3)]) = [0.25, 0.75].
+    #   pixel1: target=1, logits=[0, ln3] -> probs=[.25,.75], pred=1, correct
+    #   pixel2: target=0, logits=[0, ln3] -> probs=[.25,.75], pred=1, wrong
+    #   pixel3: target=1, logits=[ln3, 0] -> probs=[.75,.25], pred=0, wrong
+    #   pixel4: target=0, logits=[ln3, 0] -> probs=[.75,.25], pred=0, correct
+    # All 4 share confidence=0.75 -> same bin (n_bins=10 -> bin 7).
+    # accuracy_in_bin = 2/4 = 0.5, confidence_in_bin = 0.75 -> ECE = 0.25.
+    # Brier (sum over classes of (prob-onehot)^2), mean over 4 pixels = 0.625.
+    _LN3 = math.log(3.0)
+
+    def _logits_and_target(self) -> tuple[torch.Tensor, torch.Tensor]:
+        logits = torch.tensor(
+            [[0.0, self._LN3], [0.0, self._LN3], [self._LN3, 0.0], [self._LN3, 0.0]]
+        ).T.reshape(1, 2, 2, 2)
+        target = torch.tensor([[1, 0], [1, 0]]).reshape(1, 2, 2)
+        return logits, target
+
+    def test_hand_computed_ece_and_brier(self):
+        logits, target = self._logits_and_target()
+        state = new_calibration(n_bins=10)
+        calibration_update(state, logits, target)
+        assert expected_calibration_error(state) == pytest.approx(0.25)
+        assert brier_score(state) == pytest.approx(0.625)
+
+    def test_perfect_confident_prediction_is_zero_ece_and_brier(self):
+        target = torch.tensor([[0, 1], [1, 0]]).reshape(1, 2, 2)
+        logits = _binary_logits_from_mask(target) * 1000.0  # ~1.0 confidence, always correct
+        state = new_calibration(n_bins=10)
+        calibration_update(state, logits, target)
+        assert expected_calibration_error(state) == pytest.approx(0.0, abs=1e-6)
+        assert brier_score(state) == pytest.approx(0.0, abs=1e-6)
+
+    def test_streaming_two_updates_equal_one(self):
+        torch.manual_seed(0)
+        logits1 = torch.randn(2, 3, 8, 8)
+        target1 = torch.randint(0, 3, (2, 8, 8))
+        logits2 = torch.randn(1, 3, 8, 8)
+        target2 = torch.randint(0, 3, (1, 8, 8))
+
+        streamed = new_calibration(n_bins=15)
+        calibration_update(streamed, logits1, target1)
+        calibration_update(streamed, logits2, target2)
+
+        combined = new_calibration(n_bins=15)
+        calibration_update(
+            combined, torch.cat([logits1, logits2]), torch.cat([target1, target2])
+        )
+
+        assert expected_calibration_error(streamed) == pytest.approx(
+            expected_calibration_error(combined)
+        )
+        assert brier_score(streamed) == pytest.approx(brier_score(combined))
+        assert streamed["brier_count"] == combined["brier_count"] == 3 * 8 * 8
+
+    def test_empty_accumulator_is_nan(self):
+        state = new_calibration()
+        assert math.isnan(expected_calibration_error(state))
+        assert math.isnan(brier_score(state))
+
+    def test_rejects_non_positive_n_bins(self):
+        with pytest.raises(ValueError):
+            new_calibration(n_bins=0)
+
+    def test_rejects_shape_mismatch(self):
+        state = new_calibration()
+        with pytest.raises(ValueError):
+            calibration_update(state, torch.randn(1, 2, 3, 3), torch.zeros(1, 2, 2, dtype=torch.int64))

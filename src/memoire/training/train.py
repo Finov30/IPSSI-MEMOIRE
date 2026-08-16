@@ -251,10 +251,11 @@ def evaluate(
     num_classes: int,
     loss_fn: torch.nn.Module,
 ) -> dict:
-    """Full pass over ``loader``: mean loss + per-class IoU/Dice."""
+    """Full pass over ``loader``: mean loss + per-class IoU/Dice + calibration."""
     was_training = model.training
     model.eval()
     conf = seg_metrics.new_confusion(num_classes, device=device)
+    calib = seg_metrics.new_calibration(device=device)
     total_loss, batches = 0.0, 0
     for images, masks in loader:
         images = images.to(device, non_blocking=True)
@@ -262,9 +263,11 @@ def evaluate(
         logits = model(images)
         total_loss += float(loss_fn(logits, masks))
         batches += 1
-        # confusion_update moves its inputs to conf.device itself; conf already
-        # lives on `device`, so this stays on-GPU instead of a full B×K×H×W sync.
+        # confusion_update/calibration_update move their inputs to the state's
+        # own device internally; both already live on `device`, so this stays
+        # on-GPU instead of a full B×K×H×W sync.
         conf = seg_metrics.confusion_update(conf, logits, masks)
+        calib = seg_metrics.calibration_update(calib, logits, masks)
     if was_training:
         model.train()
 
@@ -276,6 +279,8 @@ def evaluate(
         "mean_iou_damage": sum(damage) / len(damage) if damage else 0.0,
         "iou_per_class": iou,
         "dice_per_class": dice,
+        "ece": seg_metrics.expected_calibration_error(calib),
+        "brier_score": seg_metrics.brier_score(calib),
     }
 
 
@@ -514,6 +519,8 @@ def train(config: dict) -> dict:
                             "mean_iou_damage": val["mean_iou_damage"],
                             "iou_per_class": val["iou_per_class"],
                             "dice_per_class": val["dice_per_class"],
+                            "ece": val["ece"],
+                            "brier_score": val["brier_score"],
                         }
                     )
                     if val["mean_iou_damage"] > best_val_iou:

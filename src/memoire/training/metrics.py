@@ -88,3 +88,87 @@ def mean_iou(conf: Tensor) -> float:
     if not values:
         return float("nan")
     return sum(values) / len(values)
+
+
+# -- calibration (chap. 7.4/8.5): does the model's confidence match its actual
+# accuracy? Reliability under from-scratch training, not (only) segmentation
+# quality — a confident-but-wrong model is worse in an opposability context
+# than one that is uncertain when it should be. Streaming, same idiom as the
+# confusion matrix above: an accumulator dict updated per batch.
+
+
+def new_calibration(n_bins: int = 15, device: torch.device | str = "cpu") -> dict:
+    """Zeroed streaming accumulator for ECE (Guo et al. 2017) and Brier score."""
+    if n_bins < 1:
+        raise ValueError(f"n_bins must be >= 1, got {n_bins}")
+    return {
+        "n_bins": n_bins,
+        "bin_confidence_sum": torch.zeros(n_bins, dtype=torch.float64, device=device),
+        "bin_correct_sum": torch.zeros(n_bins, dtype=torch.float64, device=device),
+        "bin_count": torch.zeros(n_bins, dtype=torch.int64, device=device),
+        "brier_sum": 0.0,
+        "brier_count": 0,
+    }
+
+
+@torch.no_grad()
+def calibration_update(state: dict, logits: Tensor, target: Tensor) -> dict:
+    """Accumulate one batch into `state` (in place, per-pixel) and return it.
+
+    `logits` is B×K×H×W (or K×H×W). Confidence = max softmax probability;
+    correct = argmax matches `target`. Brier is the standard multiclass form
+    (sum over classes of (prob - one_hot)^2), averaged per pixel — reduces to
+    the familiar binary Brier score when K=2.
+    """
+    probs = torch.softmax(logits.to(torch.float64), dim=-3)
+    confidence, prediction = probs.max(dim=-3)
+    if prediction.shape != target.shape:
+        raise ValueError(
+            f"prediction shape {tuple(prediction.shape)} does not match target "
+            f"{tuple(target.shape)}"
+        )
+    target = target.to(device=probs.device, dtype=torch.int64)
+    correct = (prediction == target).to(torch.float64).reshape(-1)
+    confidence = confidence.reshape(-1)
+    if confidence.numel() == 0:
+        return state
+
+    n_bins = state["n_bins"]
+    bin_idx = torch.clamp((confidence * n_bins).long(), max=n_bins - 1)
+    device = state["bin_count"].device
+    bin_idx = bin_idx.to(device)
+    state["bin_confidence_sum"] += torch.bincount(
+        bin_idx, weights=confidence.to(device), minlength=n_bins
+    )
+    state["bin_correct_sum"] += torch.bincount(
+        bin_idx, weights=correct.to(device), minlength=n_bins
+    )
+    state["bin_count"] += torch.bincount(bin_idx, minlength=n_bins)
+
+    num_classes = probs.shape[-3]
+    onehot = torch.nn.functional.one_hot(target, num_classes).movedim(-1, -3).to(probs.dtype)
+    sq_error = (probs - onehot).pow(2).sum(dim=-3)
+    state["brier_sum"] += float(sq_error.sum())
+    state["brier_count"] += int(sq_error.numel())
+    return state
+
+
+def expected_calibration_error(state: dict) -> float:
+    """ECE: bin-population-weighted mean |accuracy - confidence| per bin; NaN if empty."""
+    bin_count = state["bin_count"]
+    total = int(bin_count.sum())
+    if total == 0:
+        return float("nan")
+    count = bin_count.to(torch.float64)
+    safe_count = count.clamp(min=1)
+    bin_acc = state["bin_correct_sum"] / safe_count
+    bin_conf = state["bin_confidence_sum"] / safe_count
+    weights = count / total
+    return float((weights * (bin_acc - bin_conf).abs()).sum())
+
+
+def brier_score(state: dict) -> float:
+    """Mean multiclass Brier score over every accumulated pixel; NaN if empty."""
+    if state["brier_count"] == 0:
+        return float("nan")
+    return state["brier_sum"] / state["brier_count"]
