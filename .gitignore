@@ -2,6 +2,9 @@
 # (data/processed.dvc, tracké, pointe vers le contenu réel)
 /data-raw
 /data/processed/
+
+# Artefacts dérivés des données (régénérés par scripts/make_figures.py)
+/figures/
 *.zip
 *.tar
 *.blend

@@ -29,6 +29,11 @@ spark = [
 data = [
     "dvc>=3.50",
 ]
+docs = [
+    "matplotlib>=3.7",
+    "markdown>=3.5",
+    "weasyprint>=60",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
