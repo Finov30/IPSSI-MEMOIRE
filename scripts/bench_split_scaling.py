@@ -4,7 +4,7 @@
 Usage (nécessite une JVM -> via le service docker, comme spark_build_corpus) :
     docker compose run --rm spark python scripts/bench_split_scaling.py \
         [--scales 20000,50000,100000,250000,500000,1000000] [--repeats 3] \
-        [--out data/processed/bench_split.csv]
+        [--out figures/bench_split.csv]
 
 Le sujet (01-Sujet-memoire.md, §4bis) assume que Spark est sur-dimensionné pour
 ~19 000 images et propose en « piste bonus » de mesurer le point de croisement
@@ -86,7 +86,7 @@ def main() -> None:
         help="tailles de corpus (images), séparées par des virgules",
     )
     parser.add_argument("--repeats", type=int, default=3, help="mesures par point (min retenu)")
-    parser.add_argument("--out", type=Path, default=Path("data/processed/bench_split.csv"))
+    parser.add_argument("--out", type=Path, default=Path("figures/bench_split.csv"))
     args = parser.parse_args()
     scales = [int(s) for s in args.scales.split(",") if s.strip()]
 
