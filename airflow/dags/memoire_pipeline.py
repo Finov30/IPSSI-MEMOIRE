@@ -146,7 +146,7 @@ def memoire_pipeline():
 
     @task
     def train_run(point: int | None, seed: int, corpus_ready: str) -> dict:
-        from memoire.training.volume_curve import build_run_config
+        from memoire.training.volume_curve import build_run_config, point_label
 
         context = get_current_context()
         params = context["params"]
@@ -171,11 +171,16 @@ def memoire_pipeline():
 
             summary = train(config)
 
+        # Schéma identique à celui de run_campaign (memoire.training.volume_curve) :
+        # les deux chemins écrivent le MÊME volume_curve.csv, et un consommateur
+        # ne peut pas deviner lequel l'a produit. Écrire "point" et la valeur
+        # brute (None pour le point complet) rendait les deux CSV incompatibles.
         return {
-            "point": point,
+            "subset_n_images": point_label(point),
             "seed": seed,
             "num_train_images": summary["num_train_images"],
             "best_val_iou": summary["best_val_iou"],
+            "best_iteration": summary["best_iteration"],
             "elapsed_seconds": summary["elapsed_seconds"],
             "output_dir": summary["output_dir"],
         }
