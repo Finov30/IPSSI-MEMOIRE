@@ -57,7 +57,7 @@ def _gpu_state() -> str | None:
             ["nvidia-smi",
              "--query-gpu=utilization.gpu,temperature.gpu,memory.used,memory.total",
              "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=15, check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -70,7 +70,8 @@ def _gpu_state() -> str | None:
 def _campaign_running() -> bool:
     try:
         out = subprocess.run(
-            ["pgrep", "-f", "run_volume_curve"], capture_output=True, timeout=15
+            ["pgrep", "-f", "run_volume_curve"], capture_output=True, timeout=15,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return False
