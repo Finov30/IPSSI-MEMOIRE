@@ -1,0 +1,77 @@
+# =============================================================================
+# Campagne — ABLATION H3 : PlainEncoderDecoder (U-Net sans skips, chap. 6.5).
+# Dérivée de train-campaign.yaml, dont SEULE la clé `model` diffère.
+#
+# Règle de comparaison (chap. 7.6) : entre deux runs comparées, SEULE varie la
+# variable étudiée. Les quatre leviers autorisés sont subset_n_images (axe
+# volume, H1), density_bucket (axe densité, H2), model et copy_paste (ablations,
+# H3). Tout le reste est fixé ici, une fois pour toutes, avant le premier run.
+# Ne jamais éditer ce fichier en cours de campagne : la reprise se fie à la
+# seule existence de summary.json et réutiliserait silencieusement des runs
+# entraînées sous une autre configuration.
+#
+# Matériel de la campagne : NVIDIA RTX 3060 Laptop, 6 143 MiB de VRAM, 7,6 Gio
+# de RAM système, WSL2. Mesures réelles (U-Net base 32, 512², batch 4, fp32) :
+#   pic VRAM 3,39 Go — batch 8 est OOM même en fp16, ne pas suivre COLAB.md:90
+#   débit 0,477 s/it à froid, 0,92 s/it en régime thermique soutenu
+# =============================================================================
+
+seed: 42
+
+# Corpus complet : les trois sources harmonisées (chap. 7.2).
+# train = 14 621 images | val = 2 283 | test = 1 839
+corpus:
+  - data/processed/vehide.json
+  - data/processed/cardd.json
+  - data/processed/hitl.json
+
+images_root: null
+
+# --- tâche -------------------------------------------------------------------
+mode: binary
+taxonomy_path: configs/taxonomy.yaml
+input_size: 512
+
+# --- modèle (from scratch, init aléatoire He uniquement) ----------------------
+model: baseline
+in_channels: 3
+base_channels: 32
+depth: 4
+gn_groups: 8
+
+# --- pipeline de données -----------------------------------------------------
+batch_size: 4         # mesuré : 3,39 Go de pic sur 6,0 ; batch 8 = OOM certain
+num_workers: 2        # 7,6 Gio de RAM : num_workers=12 (= nproc) est à proscrire
+augment: true
+copy_paste: false     # ablation H3, surchargée par train-campaign-copypaste.yaml
+copy_paste_prob: 0.5
+subset_n_images: null # écrasé par run_volume_curve.py (axe volume)
+density_bucket: null  # écrasé par run_volume_curve.py (axe densité)
+
+# --- optimisation ------------------------------------------------------------
+lr: 3.0e-4
+weight_decay: 1.0e-2
+ce_weight: 1.0
+dice_weight: 1.0
+
+# Schedule long exigé par l'entraînement from-scratch (3 à 6x un fine-tuning).
+# Fixé en itérations et non en epochs : à batch 4, 30 000 itérations font
+# 240 epochs au point 500 mais 8,2 epochs au point 14 621. La courbe H1 est donc
+# lue à budget de calcul constant, et cette limite est explicitée au chap. 7.5.
+iterations: 30000
+warmup_iterations: 1000
+
+# La validation n'est jamais sous-échantillonnée (2 283 images à chaque appel,
+# quel que soit le point de volume) : espacée pour ne pas coûter autant que
+# l'entraînement lui-même.
+val_every: 2000
+
+# --- runtime -----------------------------------------------------------------
+device: cuda          # explicite plutôt que auto : échoue immédiatement si CUDA manque
+output_dir: runs/campaign-placeholder   # écrasé par run_volume_curve.py
+
+# --- suivi (JSONL history.jsonl toujours écrit) ------------------------------
+mlflow:
+  tracking_uri: null
+  experiment: memoire-seg
+  run_name: null

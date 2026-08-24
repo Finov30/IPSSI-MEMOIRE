@@ -5,6 +5,9 @@
 
 # Artefacts dérivés des données (régénérés par scripts/make_figures.py)
 /figures/
+# Sorties d'entraînement (checkpoints, history.jsonl, summary.json) — rapatriées
+# à la main vers la machine du mémoire, jamais versionnées
+/runs/
 *.zip
 *.tar
 *.blend
