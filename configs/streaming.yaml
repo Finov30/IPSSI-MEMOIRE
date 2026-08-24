@@ -1,0 +1,59 @@
+# =============================================================================
+# Streaming inference path (chap. 5.4) — consumed by scripts/serve_inference.py
+# and scripts/publish_photos.py. Every key here has a documented default in
+# memoire.serving.config.DEFAULTS; this file is what the container ships with.
+#   docker compose --profile serving up -d
+# =============================================================================
+
+# Inside the compose network the brokers answer on kafka:9092; from the host
+# (development) use localhost:29092. MEMOIRE_KAFKA_BOOTSTRAP overrides it.
+bootstrap_servers: kafka:9092
+
+# domain.entity.version — the version is in the topic NAME, so an incompatible
+# schema change creates inspection.photos.v2 and both coexist during migration.
+photos_topic: inspection.photos.v1
+masks_topic: inspection.masks.v1
+dlq_topic: inspection.photos.dlq.v1
+
+# Changing the group replays from earliest without disturbing production.
+group_id: memoire-inference-v1
+poll_timeout_ms: 1000
+
+consumer:
+  auto_offset_reset: earliest
+  max_poll_records: 8          # a batch of inferences must fit well inside
+  max_poll_interval_ms: 300000 # this interval, or the consumer is evicted
+  session_timeout_ms: 45000
+  heartbeat_interval_ms: 3000
+  # enable_auto_commit stays False (memoire.serving.kafka_client): offsets are
+  # committed by hand, after the producer's acknowledgement (at-least-once).
+
+producer:
+  acks: all
+  retries: 5
+  linger_ms: 20
+  compression_type: gzip   # the only codec that needs no C extension
+
+# Claim-check store: Kafka carries a reference, the pixels live here. Its
+# retention must be >= the topic's, otherwise a replay resolves to nothing.
+blob:
+  photos_root: /data/inspections/photos
+  masks_root: /data/inspections/masks
+  scheme: file
+
+model:
+  # Architecture/input_size/mode are read from the checkpoint itself, never
+  # from this file: the checkpoint stores the resolved training config.
+  checkpoint: runs/serving/best.pt
+  device: cpu            # never "auto": that would grab the training GPU
+  score_threshold: 0.5   # instances below this confidence are not published
+  min_area_px: 64        # measured on the ORIGINAL image, after un-letterboxing
+
+retry:
+  max_attempts: 3   # transient failures only; a malformed message is never retried
+  backoff_s: 1.0
+  # A full poll batch dead-lettered in a row is an outage (an unmounted blob
+  # volume answers "not found" for every record), not a run of poison pills:
+  # the service stops with EX_TEMPFAIL instead of draining the backlog into
+  # the DLQ. 0 disables the cap.
+  max_consecutive_dead_letters: 8
