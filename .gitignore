@@ -39,3 +39,6 @@ Thumbs.db
 
 # Environnement local (chemins machine, jamais versionnés)
 .env
+
+# Sauvegardes de runs interrompues — jamais versionnées (checkpoints lourds)
+/artefacts-interrompus/
