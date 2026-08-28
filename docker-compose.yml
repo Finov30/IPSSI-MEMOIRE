@@ -17,15 +17,6 @@ x-airflow-common: &airflow-common
       condition: service_healthy
 
 services:
-  spark:
-    build:
-      context: .
-      dockerfile: docker/spark.Dockerfile
-    volumes:
-      - .:/app
-      - ${MEMOIRE_DATASETS_ROOT}:/data/memoire-datasets:ro
-    working_dir: /app
-
   postgres:
     image: postgres:15
     environment:
@@ -75,102 +66,5 @@ services:
       - airflow-init
 
   # --- Chemin d'inférence en flux (chap. 5.4) ---------------------------------
-  # Profil "serving" : rien ici ne démarre avec `docker compose up`, ni avec
-  # `docker compose run --rm spark ...`, ni avec les services airflow. Kafka
-  # n'est JAMAIS sur le chemin d'entraînement (chap. 7.6) ; démarrage explicite
-  # et séparé :
-  #   docker compose --profile serving up -d
-  kafka:
-    image: apache/kafka:3.9.0
-    profiles: ["serving"]
-    hostname: kafka
-    environment:
-      # KRaft : pas de ZooKeeper (déprécié en 3.5, retiré en 4.0). Un seul nœud
-      # cumule broker et controller — un service, un volume et ~400 Mio de RAM
-      # de moins sur une machine qui n'en a que 7,6.
-      CLUSTER_ID: "5L6g3nShT-eMCtK--X86sw"
-      KAFKA_NODE_ID: "1"
-      KAFKA_PROCESS_ROLES: "broker,controller"
-      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
-      KAFKA_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092"
-      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092"
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
-      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
-      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
-      # Le nombre de partitions est une décision de capacité, jamais un effet de
-      # bord : les topics sont créés explicitement par kafka-init.
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
-      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
-      KAFKA_HEAP_OPTS: "-Xmx512m -Xms512m"
-    ports:
-      - "29092:29092"   # accès depuis l'hôte (dev) ; les conteneurs passent par kafka:9092
-    volumes:
-      - kafka-data:/var/lib/kafka/data
-    healthcheck:
-      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh",
-             "--bootstrap-server", "localhost:9092"]
-      interval: 10s
-      timeout: 10s
-      retries: 10
-      start_period: 20s
-    restart: unless-stopped
-
-  kafka-init:
-    image: apache/kafka:3.9.0
-    profiles: ["serving"]
-    depends_on:
-      kafka:
-        condition: service_healthy
-    entrypoint: /bin/bash
-    command:
-      - -c
-      - |
-        set -e
-        create() {
-          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
-            --create --if-not-exists --topic "$$1" --partitions "$$2" \
-            --replication-factor 1 \
-            --config retention.ms="$$3" \
-            --config max.message.bytes=1048576
-        }
-        # max.message.bytes laissé à 1 Mio : c'est la preuve, dans la
-        # configuration elle-même, que les photos transitent par référence
-        # (claim-check) et non en octets bruts.
-        create inspection.photos.v1      6 604800000
-        create inspection.masks.v1       6 2592000000
-        create inspection.photos.dlq.v1  3 2592000000
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
-    restart: "no"
-
-  inference:
-    build:
-      context: .
-      dockerfile: docker/inference.Dockerfile
-    profiles: ["serving"]
-    depends_on:
-      kafka:
-        condition: service_healthy
-      kafka-init:
-        condition: service_completed_successfully
-    environment:
-      MEMOIRE_KAFKA_BOOTSTRAP: "kafka:9092"
-      MEMOIRE_CHECKPOINT: "/app/runs/serving/best.pt"
-    volumes:
-      # Lecture seule : le service lit un checkpoint sous runs/ et ne doit
-      # jamais pouvoir écrire dans le dépôt (une campagne d'entraînement peut
-      # y écrire au même moment). Les blobs vont dans un volume séparé.
-      - .:/app:ro
-      - inspection-blobs:/data/inspections
-    working_dir: /app
-    command: ["python", "scripts/serve_inference.py", "--config", "configs/streaming.yaml"]
-    stop_grace_period: 60s   # laisse finir l'inférence en cours + flush + commit
-    restart: unless-stopped
-
 volumes:
   postgres-db-volume:
-  kafka-data:
-  inspection-blobs:

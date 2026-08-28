@@ -1,7 +1,7 @@
 """Mémoire — le DAG comme protocole expérimental (sujet v2, chap. 5.3).
 
 Trois étapes, dépendances explicites : préparation du corpus (harmonisation +
-densité + split stratifié, sur Spark — chap. 5.2) -> une tâche d'entraînement
+densité + split stratifié — chap. 5.2) -> une tâche d'entraînement
 par point de volume x seed (mappage dynamique Airflow, une tâche par run de la
 grille) -> agrégation en une courbe volume/performance.
 
@@ -53,7 +53,7 @@ def _apply_override(config: dict, dotted_key: str, value: Any) -> None:
 
 @dag(
     dag_id="memoire_pipeline",
-    description="Préparation du corpus (Spark) + campagne courbe de volume (grille d'expériences)",
+    description="Préparation du corpus + campagne courbe de volume (grille d'expériences)",
     schedule=None,
     start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
     catchup=False,
@@ -70,14 +70,18 @@ def _apply_override(config: dict, dotted_key: str, value: Any) -> None:
 def memoire_pipeline():
     @task
     def prepare_corpus() -> str:
-        """Harmonisation + densité + split stratifié (Spark), chap. 5.2."""
-        from pyspark.sql import SparkSession
+        """Harmonisation + densité + split stratifié, chap. 5.2.
 
+        Le découpage passe par ``make_group_split`` : la répartition est faite
+        par ``group_id`` et jamais par image, et son déterminisme repose sur un
+        hachage stable des identifiants de groupe, non sur le moteur qui
+        l'exécute. C'est cette propriété — et non l'ordonnanceur — qui rend la
+        partition rejouable à l'identique.
+        """
         from memoire.data import cardd, hitl, vehide
         from memoire.data.coco_export import export_coco
         from memoire.data.image_check import filter_unreadable
-        from memoire.data.spark_pipeline import make_group_split_spark
-        from memoire.data.splits import check_no_leak
+        from memoire.data.splits import check_no_leak, make_group_split
         from memoire.data.taxonomy import ExcludedClassError, load_taxonomy
 
         taxonomy = load_taxonomy(REPO_ROOT / "configs" / "taxonomy.yaml")
@@ -95,44 +99,38 @@ def memoire_pipeline():
             records, _n_corrupted, _n_corrupted_instances = filter_unreadable(records, source)
             corpora[source] = records
 
-        spark = (
-            SparkSession.builder.appName("memoire-airflow-prepare").master("local[*]").getOrCreate()
-        )
-        try:
-            splits_by_source = {}
-            for source, records in corpora.items():
-                splits_by_source[source] = make_group_split_spark(
-                    spark, records, seed=42, keep_official=(source == "cardd")
-                )
-            merged: dict[str, list[dict]] = {}
-            for per_source in splits_by_source.values():
-                for name, recs in per_source.items():
-                    merged.setdefault(name, []).extend(recs)
-            check_no_leak(merged)
+        splits_by_source = {}
+        for source, records in corpora.items():
+            splits_by_source[source] = make_group_split(
+                records, seed=42, keep_official=(source == "cardd")
+            )
+        merged: dict[str, list[dict]] = {}
+        for per_source in splits_by_source.values():
+            for name, recs in per_source.items():
+                merged.setdefault(name, []).extend(recs)
+        check_no_leak(merged)
 
-            split_of_image = {
-                rec["image_id"]: name
-                for per_source in splits_by_source.values()
-                for name, recs in per_source.items()
-                for rec in recs
-            }
-            OUT_DIR.mkdir(parents=True, exist_ok=True)
-            for source, records in corpora.items():
-                for rec in records:
-                    rec["split"] = split_of_image[rec["image_id"]]
+        split_of_image = {
+            rec["image_id"]: name
+            for per_source in splits_by_source.values()
+            for name, recs in per_source.items()
+            for rec in recs
+        }
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
+        for source, records in corpora.items():
+            for rec in records:
+                rec["split"] = split_of_image[rec["image_id"]]
 
-                def mapping_fn(source_class: str, _source: str = source) -> str | None:
-                    try:
-                        return taxonomy.canonical(_source, source_class)
-                    except ExcludedClassError:
-                        return None
+            def mapping_fn(source_class: str, _source: str = source) -> str | None:
+                try:
+                    return taxonomy.canonical(_source, source_class)
+                except ExcludedClassError:
+                    return None
 
-                export_coco(records, OUT_DIR / f"{source}.json", mapping_fn)
+            export_coco(records, OUT_DIR / f"{source}.json", mapping_fn)
 
-            n_images = sum(len(r) for r in corpora.values())
-            return f"{n_images} images harmonisées -> {OUT_DIR}"
-        finally:
-            spark.stop()
+        n_images = sum(len(r) for r in corpora.values())
+        return f"{n_images} images harmonisées -> {OUT_DIR}"
 
     @task
     def build_grid() -> list[dict]:

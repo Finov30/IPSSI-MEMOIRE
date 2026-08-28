@@ -1920,15 +1920,6 @@ wheels = [
 ]
 
 [[package]]
-name = "kafka-python"
-version = "3.0.11"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/d5/6a/8a3bfb819b5350652dfa5365409b7c611eed8ae0b37c84f53d0a26ae9513/kafka_python-3.0.11.tar.gz", hash = "sha256:a003d927e79c801d6cfd1e59ceaaf78807351e75cdb5b8ee9ce4262586f9780f", size = 514717, upload-time = "2026-08-16T16:46:15.481Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/9a/191343fd96564cbbed51bd33a53c08144e1ce285e2f10fb1578899e86c28/kafka_python-3.0.11-py3-none-any.whl", hash = "sha256:9d10cab4e11e02545d82c7e5af5702da5aa46dd4eccd11ad92a50bf6dbbecd14", size = 614237, upload-time = "2026-08-16T16:46:13.54Z" },
-]
-
-[[package]]
 name = "kiwisolver"
 version = "1.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2379,16 +2370,6 @@ docs = [
     { name = "matplotlib", version = "3.11.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "weasyprint" },
 ]
-serve = [
-    { name = "kafka-python" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "torch" },
-]
-spark = [
-    { name = "pyspark" },
-]
 train = [
     { name = "mlflow" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -2400,7 +2381,6 @@ train = [
 [package.metadata]
 requires-dist = [
     { name = "dvc", marker = "extra == 'data'", specifier = ">=3.50" },
-    { name = "kafka-python", marker = "extra == 'serve'", specifier = ">=2.2,<4" },
     { name = "markdown", marker = "extra == 'docs'", specifier = ">=3.5" },
     { name = "matplotlib", marker = "extra == 'docs'", specifier = ">=3.7" },
     { name = "mlflow", marker = "extra == 'train'", specifier = ">=2.10" },
@@ -2409,18 +2389,15 @@ requires-dist = [
     { name = "pillow", specifier = ">=10.0" },
     { name = "pyarrow", specifier = ">=15.0" },
     { name = "pycocotools", specifier = ">=2.0.7" },
-    { name = "pyspark", marker = "extra == 'spark'", specifier = ">=3.5,<5.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
-    { name = "scipy", marker = "extra == 'serve'", specifier = ">=1.10" },
     { name = "scipy", marker = "extra == 'train'", specifier = ">=1.10" },
-    { name = "torch", marker = "extra == 'serve'", specifier = ">=2.2" },
     { name = "torch", marker = "extra == 'train'", specifier = ">=2.2" },
     { name = "tqdm", specifier = ">=4.66" },
     { name = "weasyprint", marker = "extra == 'docs'", specifier = ">=60" },
 ]
-provides-extras = ["dev", "train", "spark", "serve", "data", "docs"]
+provides-extras = ["dev", "train", "data", "docs"]
 
 [[package]]
 name = "mlflow"
@@ -3588,15 +3565,6 @@ wheels = [
 ]
 
 [[package]]
-name = "py4j"
-version = "0.10.9.9"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/38/31/0b210511177070c8d5d3059556194352e5753602fa64b85b7ab81ec1a009/py4j-0.10.9.9.tar.gz", hash = "sha256:f694cad19efa5bd1dee4f3e5270eb406613c974394035e5bfc4ec1aba870b879", size = 761089, upload-time = "2025-01-15T03:53:18.624Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/bd/db/ea0203e495be491c85af87b66e37acfd3bf756fd985f87e46fc5e3bf022c/py4j-0.10.9.9-py2.py3-none-any.whl", hash = "sha256:c7c26e4158defb37b0bb124933163641a2ff6e3a3913f7811b0ddbe07ed61533", size = 203008, upload-time = "2025-01-15T03:53:15.648Z" },
-]
-
-[[package]]
 name = "pyarrow"
 version = "25.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4065,15 +4033,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/94/47/8430452269cd28863
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/1d/23801cf008f71575f0a4800463f349afa5f04b27fe783178a45cdc4d5edf/pyphen-0.18.1-py3-none-any.whl", hash = "sha256:0aa9051e15928cecadd4c632cea0258ba57215b2a197a39baa46abcdb0f47e84", size = 2116143, upload-time = "2026-08-14T11:30:10.428Z" },
 ]
-
-[[package]]
-name = "pyspark"
-version = "4.2.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "py4j" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c3/33/c987434f5d50aa802779a004ca0fd45ee4350caab50554ad7283d5a22b50/pyspark-4.2.0.tar.gz", hash = "sha256:5ad689d53570ee1674193fd4f9bda065f0db3be9363a27d2a3406cc457b70b61", size = 450129423, upload-time = "2026-07-14T22:16:46Z" }
 
 [[package]]
 name = "pytest"

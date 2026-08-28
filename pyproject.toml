@@ -23,20 +23,6 @@ train = [
     "mlflow>=2.10",
     "scipy>=1.10",
 ]
-spark = [
-    "pyspark>=3.5,<5.0",
-]
-# Chemin d'inférence en flux (chap. 5.4) — JAMAIS dans les dépendances de base :
-# ni l'entraînement ni la CI ne doivent tirer un client Kafka. kafka-python est
-# du pur Python (roue py3-none-any, zéro dépendance transitive), contrairement à
-# confluent-kafka qui embarque librdkafka ; l'import est différé dans
-# memoire.serving.kafka_client, si bien que le package s'importe (et se teste)
-# sans cet extra installé.
-serve = [
-    "kafka-python>=2.2,<4",
-    "torch>=2.2",
-    "scipy>=1.10",   # memoire.training.metrics.connected_components
-]
 data = [
     "dvc>=3.50",
 ]
@@ -57,8 +43,6 @@ where = ["src"]
 testpaths = ["tests"]
 markers = [
     "realdata: tests qui nécessitent les datasets réels sous ~/memoire-datasets",
-    "spark: tests qui nécessitent une JVM (pyspark) — exécuter via `docker compose run --rm spark python -m pytest -m spark`",
-    "kafka: tests qui nécessitent un broker Kafka réel — jamais exécutés en CI ; exécuter via `docker compose --profile serving run --rm inference python -m pytest -m kafka`",
 ]
 
 [tool.ruff]
